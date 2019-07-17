@@ -1,81 +1,199 @@
 //! Contains main morphing routines.
-use rand::{weak_rng, Rng};
+use std::str;
+use std::path::Path;
+use std::ffi::CStr;
+use std::os::raw::c_char;
+use rand::{thread_rng, Rng};
+use select::document::Document;
+use select::predicate::Name;
 
-use pad::*;
+use pad::{get_html_padding,get_object_padding};
 use objects::*;
-use parsing::{parse_objects, parse_target_size};
-use distribution::{sample_html_size, sample_object_count, sample_object_sizes};
+use parsing::{parse_objects,parse_target_size};
+use distribution::{Distributions,sample_html_size,sample_object_num,sample_object_sizes};
+use deterministic::*;
 
 const PAGE_SAMPLE_LIMIT: u8 = 10;
 
-/// Do ALPaCA's morphing.
-///
-/// If the input object is an HTML page, it samples a new page, changes the
-/// references to its objects accordingly, and pads it; if it is a different
-/// type of object, it returns the object padded to the specified size.
+/// It samples a new page using probabilistic morphing, changes the
+/// references to its objects accordingly, and pads it.
 #[no_mangle]
-pub extern "C" fn morph_object(object: &[u8], request: &str) -> *const u8 {
-    let mut object = Object::from(object, request);
+pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, html_path: *const c_char, 
+    dist_html: *const c_char, dist_obj_num: *const c_char, dist_obj_size: *const c_char, html_size: &mut usize) -> *const u8 {
+    // /* Convert arguments into &str */
+    let cstr_html = unsafe { CStr::from_ptr(html) };
+    let html = cstr_html.to_str().unwrap();
 
-    let target_size = if object.kind == ObjectKind::HTML {
-        morph_html(&mut object).expect("Failed morphing page")
-    } else {
-        parse_target_size(request)
-    };
+    let cstr_root = unsafe { CStr::from_ptr(root) };
+    let root = cstr_root.to_str().unwrap();
 
-    object.pad(target_size);
+    let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
+    let html_path = cstr_html_path.to_str().unwrap();
 
-    object.as_ptr()
-}
+    let cstr_dist_html = unsafe { CStr::from_ptr(dist_html) };
+    let dist_html = cstr_dist_html.to_str().unwrap();
 
-/// Samples a new page's characteristics from a distribution,
-/// and morphs it accordingly.
-///
-/// This function:
-/// 1. samples new page and objects' sizes from a distribution
-/// 2. appends the desired size to the objects' references in the HTML
-/// 3. pads the HTML page to the chosen size.
-///
-/// # Arguments
-///
-/// `html` - HTML page.
-fn morph_html(html: &mut Object) -> Result<usize, ()> {
-    let mut objects = parse_objects(html);
+    let cstr_dist_obj_num = unsafe { CStr::from_ptr(dist_obj_num) };
+    let dist_obj_num = cstr_dist_obj_num.to_str().unwrap();
+
+    let cstr_dist_obj_size = unsafe { CStr::from_ptr(dist_obj_size) };
+    let dist_obj_size = cstr_dist_obj_size.to_str().unwrap();
+
+
+    let mut object = Object::from_str(html,"text/html"); // The html object.
+    let mut objects = parse_objects(&object,root,html_path); // Vector of objects found in the html.
     objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
-    // Minimum characteristics.
-    let min_count = objects.len();
+    
+    let n = objects.len(); // Number of objects.
 
-    let mut rng = weak_rng();
+    let mut rng = thread_rng();
+
+    // Construct a Distributions object containing the given distributions.
+    let dists;
+    match Distributions::from(dist_html, dist_obj_num, dist_obj_size, root) {
+        Ok(result) => dists = result,
+        Err(_) => {
+            *html_size = object.content.len();
+            return object.as_ptr();
+        }
+    }
 
     // Try morphing for PAGE_SAMPLE_LIMIT times.
     let mut success = false;
     for _ in 0..PAGE_SAMPLE_LIMIT {
-        if morph_from_distribution(&mut rng, &mut objects, min_count).is_ok() {
+        if morph_from_distribution(&mut rng, &mut objects, n, &dists).is_ok() {
             success = true;
             break;
         }
     }
 
     if !success {
-        return Err(());
+        *html_size = object.content.len();
+        return object.as_ptr();
     }
 
-    insert_objects_refs(html, &objects)?;
+    if !insert_objects_refs(&mut object, &objects, n).is_ok() {
+        *html_size = object.content.len();
+        return object.as_ptr();
+    }
 
-    // Return the target HTML page size.
-    let html_min_size = html.content.len();
-    sample_html_size(&mut rng, html_min_size)
+    // Sample the target HTML page size.
+    let html_min_size = object.content.len() + 7; // Plus 7 because of the comment characters.
+    let target_size;
+    match sample_html_size(&mut rng,&dists,html_min_size) {
+        Ok(size) => target_size = size,
+        Err(_) => {
+            *html_size = object.content.len();
+            return object.as_ptr()
+        } 
+    }
+
+    get_html_padding(&mut object,target_size); // Pad the html to the target size.
+
+    *html_size = object.content.len();
+    object.as_ptr()
+}
+
+/// It samples a new page using deterministic morphing, changes the
+/// references to its objects accordingly, and pads it.
+#[no_mangle]
+pub extern "C" fn morph_html_Dalpaca(html: *const c_char, root: *const c_char, html_path: *const c_char, 
+    obj_num: &usize, obj_size: &usize, max_obj_size: &usize, html_size: &mut usize) -> *const u8 {
+    // /* Convert arguments into &str */
+    let cstr_html = unsafe { CStr::from_ptr(html) };
+    let html = cstr_html.to_str().unwrap();
+
+    let cstr_root = unsafe { CStr::from_ptr(root) };
+    let root = cstr_root.to_str().unwrap();
+
+    let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
+    let html_path = cstr_html_path.to_str().unwrap();
+
+    let mut object = Object::from_str(html,"text/html"); // The html object.
+    let mut objects = parse_objects(&object,root,html_path); // Vector of objects found in the html.
+    objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
+
+    let n = objects.len(); // Number of objects.
+
+    let mut success = false;
+    if morph_deterministic(&mut objects, n, *obj_num, *obj_size, *max_obj_size).is_ok() {
+        success = true;
+    }
+
+    if !success {
+        *html_size = object.content.len();
+        return object.as_ptr();
+    }
+
+    // Insert the GET parameter to the objects.
+    if !insert_objects_refs(&mut object, &objects, n).is_ok() {
+        *html_size = object.content.len();
+        return object.as_ptr();
+    }
+
+    let html_min_size = object.content.len() + 7; // Plus 7 because of the comment characters.
+    let target_size =  get_multiple(*obj_size, html_min_size); // Target size for the html is a multiple of "obj_size".
+
+    get_html_padding(&mut object,target_size); // Pad the html to the target size.
+
+    *html_size = object.content.len();
+    object.as_ptr()
+}
+
+/// Returns the object's padding.
+#[no_mangle]
+pub extern "C" fn morph_object(kind: *const c_char, query: *const c_char, size: &mut usize) -> *const u8 {
+
+    let cstr_kind = unsafe { CStr::from_ptr(kind) };
+    let kind = cstr_kind.to_str().unwrap();
+    
+    let cstr_query = unsafe { CStr::from_ptr(query) };
+    let query = cstr_query.to_str().unwrap();
+
+
+    let mut object = Object::from_str("",kind); 
+    let target_size = parse_target_size(query);
+
+    if (target_size == 0) || (target_size <= *size) { // Target size has to be greater than current size.
+        *size = 0;
+        return object.as_ptr();
+    }
+
+    get_object_padding(&mut object,*size,target_size); // Get the padding for the object.
+
+    *size = object.content.len(); // Update the size to contain the number of the padding bytes.
+    object.as_ptr()
+}
+
+/// Frees memory allocated in rust.
+#[no_mangle]
+pub extern "C" fn free_memory(data: *mut u8, size: &usize) {
+    let s = unsafe { std::slice::from_raw_parts_mut(data, *size) };
+    let s = s.as_mut_ptr();
+    unsafe {
+        Box::from_raw(s);
+    }
 }
 
 fn morph_from_distribution<R: Rng>(
     rng: &mut R,
     objects: &mut Vec<Object>,
     min_count: usize,
+    dists: &Distributions
 ) -> Result<(), ()> {
     // Sample target number of objects (count) and target sizes for morphed
     // objects.
-    let target_count = sample_object_count(rng, min_count)?;
-    let mut target_sizes = sample_object_sizes(rng, target_count)?;
+    let target_count;
+    match sample_object_num(rng,dists,min_count) {
+        Ok(count) => target_count = count,
+        Err(_) => return Err(())
+    }
+    
+    let mut target_sizes: Vec<usize>;
+    match sample_object_sizes(rng,dists,target_count) {
+        Ok(sampled_sizes) => target_sizes = sampled_sizes,
+        Err(_) => return Err(())
+    }
 
     // Match target sizes to objects.
     // We will consider each target_size and decide whether to use it to pad
@@ -86,8 +204,17 @@ fn morph_from_distribution<R: Rng>(
 
     let n = objects.len(); // Keep track of initial number of objects.
     let mut i = 0; // Pointing at next object to morph.
+    let mut create_new_obj;
     for s in target_sizes {
+        create_new_obj = true;
         if (i < n) && (s >= objects[i].content.len()) {
+            create_new_obj = false;
+            if objects[i].kind == ObjectKind::CSS && (objects[i].content.len() + 4 > s){ // CSS padding needs to be at least 4.
+                create_new_obj = true
+            }
+        }
+
+        if !create_new_obj {
             // Pad i-th object to size s.
             objects[i].target_size = Some(s);
             i += 1;
@@ -107,152 +234,145 @@ fn morph_from_distribution<R: Rng>(
     if i < n {
         // Need to remove padding objects.
         objects.truncate(n);
-
         return Err(());
     }
 
     Ok(())
 }
 
-#[allow(unused)]
-fn insert_objects_refs(html: &mut Object, objects: &[Object]) -> Result<(), ()> {
-    unimplemented!();
-}
+fn morph_deterministic(
+    objects: &mut Vec<Object>, 
+    min_count: usize, 
+    obj_num: usize, 
+    obj_size: usize, 
+    max_obj_size: usize
+) -> Result<(), ()> {
+    // Sample target number of objects (count) and target sizes for morphed
+    // objects. Count is a multiple of "obj_num" and bigger than "min_count".
+    // Target size for each objects is a multiple of "obj_size" and bigger 
+    // than the object's  original size.
+    let target_count = get_multiple(obj_num,min_count);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rand::{SeedableRng, XorShiftRng};
-
-    fn generate_objects() -> Vec<Object> {
-        let object_sizes: Vec<usize> = vec![400, 2000, 1000, 100];
-
-        object_sizes
-            .iter()
-            .map(|s| Object {
-                kind: ObjectKind::Unknown,
-                content: vec![0u8; *s],
-                position: None,
-                target_size: None,
-            })
-            .collect()
-    }
-
-    fn init_seeded_rng() -> XorShiftRng {
-        let s: [u32; 4] = [0, 1, 2, 3];
-
-        XorShiftRng::from_seed(s)
-    }
-
-    #[test]
-    fn test_morph_objects_from_distribution() {
-        let mut objects = generate_objects();
-        let mut rng = init_seeded_rng();
-
-        let min_count = objects.len();
-
-        if let Err(_) = morph_from_distribution(&mut rng, &mut objects, min_count) {
-            assert!(false);
+    for i in 0..objects.len() {
+        let mut min_size = objects[i].content.len();
+        if objects[i].kind == ObjectKind::CSS { // CSS padding needs to be at least 4.
+            min_size += 4;
         }
 
-        let expected_sizes = vec![
-            1048, 2167, 3824, 4230, 1131, 1215, 1529, 1897, 4260, 5343, 5373, 8315, 8513, 10687,
-            12617, 12807, 13867, 14644, 24146,
-        ];
-        let new_sizes = objects
-            .iter()
-            .map(|o| o.target_size.expect("Need Some"))
-            .collect::<Vec<_>>();
-        println!("expected sizes: {:?}", new_sizes);
-        assert!(new_sizes == expected_sizes);
+        let obj_target_size = get_multiple(obj_size,min_size);
+        objects[i].target_size = Some(obj_target_size);
     }
-    // TODO: I migrated the following `test_pad_object_*` tests from the pad
-    // module, where once lived the pub extern fn `pad_object`, which was later
-    // replaced `morph_object` here. Since testing `morph_object' requires we
-    // first implement `parsing::parse_object_kind`, I'm commenting these tests
-    // out until we've done that.
-    //
-    // #[test]
-    // fn test_pad_object_html() {
-    //     let mut rng = weak_rng();
-    //     let raw_len = Range::new(0, 50).ind_sample(&mut rng);
-    //     let raw = sample(&mut rng, 46..127, raw_len);
-    //     assert_eq!(raw.len(), raw_len);
-    //     let comment_syntax_size = HTML_COMMENT_START_SIZE
-    //         + HTML_COMMENT_END_SIZE;
-    //     let pad_len = Range::new(comment_syntax_size, 50)
-    //         .ind_sample(&mut rng);
-    //     let target_size = raw_len + pad_len;
-    //     let obj_ptr = morph_object(&raw, "html", target_size);
-    //     unsafe {
-    //         for i in 0..raw_len {
-    //             assert_eq!(raw[i], *obj_ptr.offset(i as isize));
-    //         }
-    //         for i in 0..HTML_COMMENT_START_SIZE {
-    //             assert_eq!(HTML_COMMENT_START.as_bytes()[i],
-    //             *obj_ptr.offset(raw_len as isize + i as isize));
-    //         }
-    //         for i in 0..HTML_COMMENT_END_SIZE {
-    //             assert_eq!(HTML_COMMENT_END.as_bytes()[i],
-    //             *obj_ptr.offset(target_size as isize
-    //                             - HTML_COMMENT_END_SIZE as isize
-    //                             + i as isize));
-    //         }
-    //     }
-    // }
 
-    // #[test]
-    // fn test_pad_object_css() {
-    //     let mut rng = weak_rng();
-    //     let raw_len = Range::new(0, 50).ind_sample(&mut rng);
-    //     let raw = sample(&mut rng, 43..127, raw_len);
-    //     assert_eq!(raw.len(), raw_len);
-    //     let comment_syntax_size = CSS_COMMENT_START_SIZE
-    //         + CSS_COMMENT_END_SIZE;
-    //     let pad_len = Range::new(comment_syntax_size, 50)
-    //         .ind_sample(&mut rng);
-    //     let target_size = raw_len + pad_len;
-    //     let obj_ptr = morph_object(&raw, "css", target_size);
-    //     unsafe {
-    //         for i in 0..raw_len {
-    //             assert_eq!(raw[i], *obj_ptr.offset(i as isize));
-    //         }
-    //         for i in 0..CSS_COMMENT_START_SIZE {
-    //             assert_eq!(CSS_COMMENT_START.as_bytes()[i],
-    //                        *obj_ptr.offset(raw_len as isize + i as isize));
-    //         }
-    //         for i in 0..CSS_COMMENT_END_SIZE {
-    //             assert_eq!(CSS_COMMENT_END.as_bytes()[i],
-    //                        *obj_ptr.offset(target_size as isize
-    //                                    - CSS_COMMENT_END_SIZE as isize
-    //                                    + i as isize));
-    //         }
-    //     }
-    // }
+    let fake_objects_count = target_count - min_count; // The number of fake objects.
 
-    // #[test]
-    // fn test_pad_object_alpaca() {
-    //     let mut rng = weak_rng();
-    //     let raw_len = Range::new(0, 50).ind_sample(&mut rng);
-    //     let raw = rng.gen_iter::<u8>().take(raw_len).collect::<Vec<u8>>();
-    //     assert_eq!(raw.len(), raw_len);
-    //     let pad_len = Range::new(0, 50).ind_sample(&mut rng);
-    //     let target_size = raw_len + pad_len;
-    //     let obj_ptr = morph_object(&raw, "alpaca", target_size);
-    //     unsafe {
-    //         for i in 0..raw_len {
-    //             assert_eq!(raw[i], *obj_ptr.offset(i as isize));
-    //         }
-    //     }
-    // }
+    let mut rng = thread_rng();
 
-    // #[should_panic]
-    // #[test]
-    // fn test_pad_object_too_small() {
-    //     let mut rng = weak_rng();
-    //     let raw_len = Range::new(1, 50).ind_sample(&mut rng);
-    //     let raw = rng.gen_iter::<u8>().take(raw_len).collect::<Vec<u8>>();
-    //     assert_eq!(raw.len(), raw_len);
-    //     let obj_ptr = morph_object(&raw, "alpaca", raw_len - 1);
-    // }
+    // To get the target size of each fake object, sample uniformly a multiple
+    // of "obj_size" which is smaller than "max_obj_size".
+    let fake_objects_sizes;
+    match get_multiples_in_range(&mut rng,obj_size,max_obj_size,fake_objects_count) {
+        Ok(sizes) => fake_objects_sizes = sizes,
+        Err(_) => return Err(())
+    }
+
+    // Add the fake objects to the vector.
+    for i in 0..fake_objects_count{
+        // Create new padding object.
+        let o = Object {
+            kind: ObjectKind::Alpaca,
+            content: Vec::new(),
+            position: None,
+            target_size: Some(fake_objects_sizes[i]),
+        };
+        objects.push(o);
+    }
+
+    Ok(())
+}
+
+/// Inserts the ALPaCA GET parameters to the html objects, and adds the fake objects to the html.
+fn insert_objects_refs(html: &mut Object, objects: &[Object], n: usize) -> Result<(), ()> {
+    let init_obj = &objects[0..n]; // Slice which contains initial objects
+    let padding_obj = &objects[n..]; // Slice which contains ALPaCA objects
+
+    let mut html_string: String;
+    {
+        let html_str = str::from_utf8(&html.content).unwrap(); // Original html str
+        html_string = html_str.to_string(); // Original html String
+        let mut document = Document::from(html_str);
+
+        for object in init_obj {
+            let new_elem = append_ref(&document,&object);
+            if new_elem == "" {continue;}
+            // Replace the element in the html String
+            let elem = document.nth(object.position.unwrap()).unwrap().html();
+            html_string = html_string.replacen(&elem,&new_elem,1);
+        }
+
+        // Update the document with the new html String 
+        document = Document::from(str::from_utf8(&html_string.into_bytes()).unwrap());
+        // Add the fake ALPaCA objects
+        html_string = add_padding_objects(&document,padding_obj);
+    }
+
+    html_string.insert_str(0,"<!DOCTYPE html>");
+    html.content = html_string.into_bytes();
+
+    Ok(())
+
+}
+
+/// Appends the ALPaCA GET parameter to an html element
+fn append_ref(document: &Document, object: &Object) -> String {
+    // Construct the link with the appended new parameter
+    let mut new_link = String::from("alpaca-padding=");
+    new_link.push_str(&(object.target_size.unwrap().to_string())); // Append the target size
+    
+    let attr = if object.kind == ObjectKind::IMG {
+        "src"
+    } else if object.kind == ObjectKind::CSS {
+        "href"
+    } else {
+        return String::from("");
+    };
+
+    let link = String::from(document.nth(object.position.unwrap()).unwrap().attr(attr).unwrap()); // Object's path
+    let file_extension = Path::new(&link).extension().unwrap().to_str().unwrap();
+
+    // Check if there is already a GET parameter in the file path
+    let prefix = if file_extension.contains("?") {
+        '&'
+    } else {
+        '?'
+    };
+
+    new_link.insert(0,prefix);
+    new_link.insert_str(0,&link);
+
+    let element = document.nth(object.position.unwrap()).unwrap().html();
+    element.replace(&link,&new_link)
+}
+
+/// Adds the fake ALPaCA objects in the end of the html body
+fn add_padding_objects(document: &Document, objects: &[Object]) -> String {
+    // Find the document's node which corresponds to the html body
+    for i in 0..document.nodes.len() {
+        if document.nth(i).unwrap().name().is_none() {continue;}
+        if document.nth(i).unwrap().name().unwrap() == "body" {
+            let mut body = document.nth(i).unwrap().inner_html();
+            for object in objects {
+                let elem = format!("<img src=\"/__alpaca_fake_image.png?alpaca-padding={}\" style=\"visibility:hidden\">\n", object.target_size.unwrap().to_string());
+                body.push_str(&elem);
+            }
+            body.insert_str(0,"<body>");
+            body.push_str("</body>");
+
+            // Return the new html which contains the padding objects in its body.
+            return (document.find(Name("html")).next().unwrap().html()).replace(&document.nth(i).unwrap().html(),&body);
+
+        }
+    }
+
+    // Return the original html if there was no node named body
+    document.find(Name("html")).next().unwrap().html()
 }

@@ -30,10 +30,20 @@ pub struct Object {
 }
 
 impl Object {
-    /// Construct an Object given an array of bytes and the HTML request str
-    pub fn from(raw: &[u8], request: &str) -> Object {
+    /// Construct an Object given its content as &str and mime type
+    pub fn from_str(cont: &str, mime: &str) -> Object {
         Object {
-            kind: parse_object_kind(raw, request),
+            kind: parse_object_kind(mime),
+            content: Vec::from(cont),
+            position: None,
+            target_size: None,
+        }
+    }
+
+    /// Construct an Object given its content as a byte array and mime type
+    pub fn from_raw(raw: &[u8], mime: &str) -> Object {
+        Object {
+            kind: parse_object_kind(mime),
             content: raw.to_vec(),
             position: None,
             target_size: None,
@@ -41,42 +51,11 @@ impl Object {
     }
 
     /// Returns a raw pointer to our Object's 'content' field's slice's buffer.
-    /// "The caller must ensure that the slice outlives the pointer this
-    /// function returns, or else it will end up pointing to garbage."
-    pub fn as_ptr(&self) -> *const u8 {
-        self.content.as_ptr()
-    }
-}
+    pub fn as_ptr(self) -> *const u8 {
+        let mut buf = self.content.into_boxed_slice();
+        let data = buf.as_mut_ptr();
+        std::mem::forget(buf);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use rand::distributions::{IndependentSample, Range};
-    use rand::{weak_rng, Rng};
-
-    #[test]
-    fn test_object_from_and_as_ptr_jpg() {
-        let mut rng = weak_rng();
-        let raw_len = Range::new(0, 50).ind_sample(&mut rng);
-        let raw = rng.gen_iter::<u8>().take(raw_len).collect::<Vec<u8>>();
-        let object = Object {
-            kind: ObjectKind::IMG,
-            content: raw.to_vec(),
-            position: None,
-            target_size: None,
-        };
-        assert_eq!(object.content.len(), raw_len);
-        assert!(match object.kind {
-            ObjectKind::IMG => true,
-            _ => false,
-        });
-
-        let obj_ptr = object.as_ptr();
-        unsafe {
-            for i in 0..raw_len {
-                assert_eq!(raw[i], *obj_ptr.offset(i as isize));
-            }
-        }
+        data
     }
 }
