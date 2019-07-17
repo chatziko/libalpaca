@@ -13,3 +13,8 @@ This library implements the ALPaCA website fingerprinting defense, and is intend
 <p align="center">
   <img src="/design/images/alpacas-in-a-field.jpg">
 </p>
+
+## Compilation
+
+In order to compile the library, Rust should be installed in your computer. Download the repository, move inside the folder
+and run `cargo build --release`. The `libalpaca.so` file is created in the `target/release/` folder.
