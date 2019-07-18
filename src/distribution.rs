@@ -420,8 +420,8 @@ fn sample_from_file<R: Rng>(rng: &mut R, values: &Vec<usize>, probs: &Vec<f64>, 
 }
 
 /// Resolves the absolute path of a distribution file.
-fn resolve_file_path(root: &str, relative: &str) -> String {
-	let relative = String::from(relative);
+fn resolve_file_path(root: &str, dist: &str) -> String {
+	let relative = String::from(dist);
 
 	// Resolve the dots in the path so far
 	let components: Vec<&str> = relative.split("/").collect(); 	// Original components of the path
