@@ -66,8 +66,7 @@ impl Distributions {
 /// the Distribtuions object accordingly.
 fn parse_given_dist(obj: &mut Distributions,dist: &str, root: &str, n: usize) -> Result<(), ()>{
     if dist.ends_with(".dist") { // A distribution file has been given
-        let mut absolute = String::from(root);
-        absolute.push_str(dist);
+        let absolute = resolve_file_path(root,dist);
         match fs::read_to_string(absolute) {
             Ok(data) => {
                 let all_values: Vec<f64> = data.split_whitespace().map(|s| s.parse().unwrap()).collect(); // Contents of the file.
@@ -119,7 +118,6 @@ fn parse_given_dist(obj: &mut Distributions,dist: &str, root: &str, n: usize) ->
 
     Ok(())
 }
-
 
 /// Samples the html target size.
 pub fn sample_html_size<R: Rng>(rng: &mut R, dists: &Distributions, ge: usize) -> Result<usize, ()> {
@@ -419,4 +417,32 @@ fn sample_from_file<R: Rng>(rng: &mut R, values: &Vec<usize>, probs: &Vec<f64>, 
 
     Ok(sampled_nums)
 
+}
+
+/// Resolves the absolute path of a distribution file.
+fn resolve_file_path(root: &str, relative: &str) -> String {
+	let relative = String::from(relative);
+
+	// Resolve the dots in the path so far
+	let components: Vec<&str> = relative.split("/").collect(); 	// Original components of the path
+
+	let mut normalized: Vec<String> = Vec::with_capacity(components.len()); // Stack to be used for the normalization	
+
+	for comp in components {
+		if comp == "." || comp == "" {continue;}
+		else if comp == ".." {
+			if !normalized.is_empty() {
+				normalized.pop();
+			}
+		}
+		else {
+			normalized.push("/".to_string()+comp);
+		}
+	}
+
+	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
+
+	absolute.insert_str(0,root); // Make the above path absolute by adding the root
+
+	absolute
 }
