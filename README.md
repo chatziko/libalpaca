@@ -11,7 +11,7 @@ This library implements the ALPaCA website fingerprinting defense, and is intend
 
 
 <p align="center">
-  <img src="/design/images/alpacas-in-a-field.jpg">
+  <img src="/design/sample-site/alpacas-in-a-field.jpg">
 </p>
 
 ## Compilation
