@@ -1,5 +1,6 @@
 //! Contains main morphing routines.
 use std::str;
+use std::ptr;
 use std::path::Path;
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -22,7 +23,10 @@ pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, h
     dist_html: *const c_char, dist_obj_num: *const c_char, dist_obj_size: *const c_char, html_size: &mut usize) -> *const u8 {
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = cstr_html.to_str().unwrap();
+    let html = match cstr_html.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null(),       // return NULL pointer if html cannot be converted to a string
+    };
 
     let cstr_root = unsafe { CStr::from_ptr(root) };
     let root = cstr_root.to_str().unwrap();
@@ -101,7 +105,10 @@ pub extern "C" fn morph_html_Dalpaca(html: *const c_char, root: *const c_char, h
     obj_num: &usize, obj_size: &usize, max_obj_size: &usize, html_size: &mut usize) -> *const u8 {
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = cstr_html.to_str().unwrap();
+    let html = match cstr_html.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null(),       // return NULL pointer if html cannot be converted to a string
+    };
 
     let cstr_root = unsafe { CStr::from_ptr(root) };
     let root = cstr_root.to_str().unwrap();
