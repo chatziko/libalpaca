@@ -22,7 +22,7 @@
 
         <header class="post-header">
           <h1 class="post-title">libalpaca</h1>
-          <h5 class="post-description">Dynamic PHP page <a href="index.html">[load static]</a></h5>
+          <h5 class="post-description"><?php echo "Dynamic PHP page" ?> <a href="index.html">[load static]</a></h5>
         </header>
 
         <img src="alpacas-in-a-field.jpg" width="700"></img>
