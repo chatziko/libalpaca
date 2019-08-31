@@ -31,7 +31,7 @@ pub fn parse_target_size(query: &str) -> usize {
 }
 
 /// Parses the objects contained in an HTML page.
-pub fn parse_objects(html: &Object, root: &str, html_path: &str) -> Vec<Object> {
+pub fn parse_objects(html: &Object, root: &str, html_path: &str, alias: usize) -> Vec<Object> {
 	//Html string
 	let html_str = str::from_utf8(&html.content).unwrap();
 	//Objects vector
@@ -50,7 +50,7 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str) -> Vec<Object> 
     						let relative = split[0];
     						
     						let fullpath;
-    						match absolute_path(root,relative,html_path) {
+    						match uri_to_abs_fs_path(root,relative,html_path,alias) {
     							Some(absolute) => fullpath = absolute,
     							None => continue
     						}
@@ -81,7 +81,7 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str) -> Vec<Object> 
     			let relative = split[0];
 
 		    	let fullpath;
-				match absolute_path(root,relative,html_path) {
+				match uri_to_abs_fs_path(root,relative,html_path,alias) {
 					Some(absolute) => fullpath = absolute,
 					None => continue
 				}
@@ -102,9 +102,9 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str) -> Vec<Object> 
 	objects
 }
 
-/// Get the absolute path of a file found in the html.
-/// Return None if the file is located in another server
-fn absolute_path(root: &str, relative: &str, html_path: &str) -> Option<String> {
+/// Maps a (relative or absolute) uri, to an absolute filesystem path.
+/// Returns None if uri_path is located in another server
+fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize) -> Option<String> {
 	if relative.starts_with("https://") || relative.starts_with("http://") {
 		return None;
 	}
@@ -137,6 +137,8 @@ fn absolute_path(root: &str, relative: &str, html_path: &str) -> Option<String> 
 	}
 
 	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
+
+	absolute = absolute[alias..].to_string(); // Remove alias characters in case there are any
 
 	absolute.insert_str(0,root); // Make the above path absolute by adding the root
 

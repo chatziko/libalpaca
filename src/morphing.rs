@@ -20,7 +20,7 @@ const PAGE_SAMPLE_LIMIT: u8 = 10;
 /// references to its objects accordingly, and pads it.
 #[no_mangle]
 pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, html_path: *const c_char, 
-    dist_html: *const c_char, dist_obj_num: *const c_char, dist_obj_size: *const c_char, html_size: &mut usize) -> *const u8 {
+    dist_html: *const c_char, dist_obj_num: *const c_char, dist_obj_size: *const c_char, html_size: &mut usize, alias: &usize) -> *const u8 {
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
     let html = match cstr_html.to_str() {
@@ -45,7 +45,7 @@ pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, h
 
 
     let mut object = Object::from_str(html,"text/html"); // The html object.
-    let mut objects = parse_objects(&object,root,html_path); // Vector of objects found in the html.
+    let mut objects = parse_objects(&object,root,html_path,*alias); // Vector of objects found in the html.
     objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
     
     let n = objects.len(); // Number of objects.
@@ -102,7 +102,7 @@ pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, h
 /// references to its objects accordingly, and pads it.
 #[no_mangle]
 pub extern "C" fn morph_html_Dalpaca(html: *const c_char, root: *const c_char, html_path: *const c_char, 
-    obj_num: &usize, obj_size: &usize, max_obj_size: &usize, html_size: &mut usize) -> *const u8 {
+    obj_num: &usize, obj_size: &usize, max_obj_size: &usize, html_size: &mut usize, alias: &usize) -> *const u8 {
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
     let html = match cstr_html.to_str() {
@@ -117,7 +117,7 @@ pub extern "C" fn morph_html_Dalpaca(html: *const c_char, root: *const c_char, h
     let html_path = cstr_html_path.to_str().unwrap();
 
     let mut object = Object::from_str(html,"text/html"); // The html object.
-    let mut objects = parse_objects(&object,root,html_path); // Vector of objects found in the html.
+    let mut objects = parse_objects(&object,root,html_path,*alias); // Vector of objects found in the html.
     objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
 
     let n = objects.len(); // Number of objects.
