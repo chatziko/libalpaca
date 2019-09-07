@@ -113,10 +113,13 @@ fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize)
 
 	if !fs_relative.starts_with('/') {
 		let base = Path::new(html_path).parent().unwrap().to_str().unwrap();
+		
 		if !base.ends_with('/') {
 			fs_relative.insert(0,'/');
 		}
 		fs_relative.insert_str(0,base);
+
+		fs_relative = fs_relative[alias..].to_string(); // Remove alias characters in case there are any
 	}
 
 	// Resolve the dots in the path so far
@@ -137,9 +140,7 @@ fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize)
 	}
 
 	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
-
-	absolute = absolute[alias..].to_string(); // Remove alias characters in case there are any
-
+		
 	absolute.insert_str(0,root); // Make the above path absolute by adding the root
 
 	Some(absolute)
