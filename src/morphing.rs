@@ -21,6 +21,9 @@ const PAGE_SAMPLE_LIMIT: u8 = 10;
 #[no_mangle]
 pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, html_path: *const c_char, 
     dist_html: *const c_char, dist_obj_num: *const c_char, dist_obj_size: *const c_char, html_size: &mut usize, alias: &usize) -> *const u8 {
+
+    eprint!("morph_html_Palpaca\n");
+
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
     let html = match cstr_html.to_str() {
@@ -72,6 +75,7 @@ pub extern "C" fn morph_html_Palpaca(html: *const c_char, root: *const c_char, h
     }
 
     if !success {
+        eprint!("libalpace: morph_html_Palpaca: PAGE_SAMPLE_LIMIT={} reached.\n", PAGE_SAMPLE_LIMIT);
         *html_size = object.content.len();
         return object.as_ptr();
     }

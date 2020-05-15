@@ -64,10 +64,12 @@ impl Distributions {
 
 /// Parses a given distribution and decides if its a known one or a file. Updates
 /// the Distribtuions object accordingly.
-fn parse_given_dist(obj: &mut Distributions,dist: &str, root: &str, n: usize) -> Result<(), ()>{
+fn parse_given_dist(obj: &mut Distributions,dist: &str, _root: &str, n: usize) -> Result<(), ()>{
     if dist.ends_with(".dist") { // A distribution file has been given
-        let absolute = resolve_file_path(root,dist);
-        match fs::read_to_string(absolute) {
+        // Kostas: no sure what is the puropse of this resolve
+        // let absolute = resolve_file_path(root,dist);
+
+        match fs::read_to_string(dist.clone()) {
             Ok(data) => {
                 let all_values: Vec<f64> = data.split_whitespace().map(|s| s.parse().unwrap()).collect(); // Contents of the file.
                 if all_values.len() % 2 != 0 { // There has to be a 1-1 match between values and probabilities.
@@ -100,7 +102,10 @@ fn parse_given_dist(obj: &mut Distributions,dist: &str, root: &str, n: usize) ->
                     return Err(());
                 }
             },
-            Err(_) => return Err(())
+            Err(e) => {
+                eprint!("libalpaca: cannot open {}: {}\n", dist, e);
+                return Err(())
+            }
         }
     }
     else { // A known distribution and its parameters have been given.
@@ -251,6 +256,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -275,6 +281,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -299,6 +306,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -323,6 +331,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -347,6 +356,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -371,6 +381,7 @@ fn sample_from_distribution<R: Rng>(rng: &mut R, dist: &str, ge: usize, n: usize
                 }
             }  
             if sampled == false { // No number was found for an iteration
+                eprint!("libalpaca: sample_from_distribution: {}: SAMLPE_LIMIT={} reached\n", dist_kind, SAMPLE_LIMIT);
                 return Err(());
             }
         }
@@ -406,11 +417,13 @@ fn sample_from_file<R: Rng>(rng: &mut R, values: &Vec<usize>, probs: &Vec<f64>, 
             }
             if sampled_num >= ge {
                 sampled_nums.push(sampled_num);
+                eprint!("libalpaca: sampled {}\n", sampled_num);
                 sampled = true;
                 break;
             }
         }
         if sampled == false { // No number was found for an iteration
+            eprint!("libalpaca: sample_from_file: SAMLPE_LIMIT={} reached\n", SAMPLE_LIMIT);
             return Err(());
         }
     }
@@ -419,30 +432,30 @@ fn sample_from_file<R: Rng>(rng: &mut R, values: &Vec<usize>, probs: &Vec<f64>, 
 
 }
 
-/// Resolves the absolute path of a distribution file.
-fn resolve_file_path(root: &str, dist: &str) -> String {
-	let relative = String::from(dist);
+///// Resolves the absolute path of a distribution file.
+// fn resolve_file_path(root: &str, dist: &str) -> String {
+// 	let relative = String::from(dist);
 
-	// Resolve the dots in the path so far
-	let components: Vec<&str> = relative.split("/").collect(); 	// Original components of the path
+// 	// Resolve the dots in the path so far
+// 	let components: Vec<&str> = relative.split("/").collect(); 	// Original components of the path
 
-	let mut normalized: Vec<String> = Vec::with_capacity(components.len()); // Stack to be used for the normalization	
+// 	let mut normalized: Vec<String> = Vec::with_capacity(components.len()); // Stack to be used for the normalization	
 
-	for comp in components {
-		if comp == "." || comp == "" {continue;}
-		else if comp == ".." {
-			if !normalized.is_empty() {
-				normalized.pop();
-			}
-		}
-		else {
-			normalized.push("/".to_string()+comp);
-		}
-	}
+// 	for comp in components {
+// 		if comp == "." || comp == "" {continue;}
+// 		else if comp == ".." {
+// 			if !normalized.is_empty() {
+// 				normalized.pop();
+// 			}
+// 		}
+// 		else {
+// 			normalized.push("/".to_string()+comp);
+// 		}
+// 	}
 
-	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
+// 	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
 
-	absolute.insert_str(0,root); // Make the above path absolute by adding the root
+// 	absolute.insert_str(0,root); // Make the above path absolute by adding the root
 
-	absolute
-}
+// 	absolute
+// }
