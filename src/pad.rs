@@ -61,7 +61,7 @@ fn get_binary_padding(pad_len: usize) -> Vec<u8> {
     let mut rng = thread_rng();
     let mut pad: Vec<u8> = Vec::with_capacity(pad_len);
     for _ in 0..pad_len {
-        pad.push(rng.gen::<(u8)>());
+        pad.push(rng.gen::<u8>());
     }
     pad
 }
