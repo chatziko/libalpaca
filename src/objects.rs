@@ -27,26 +27,30 @@ pub struct Object {
     pub position: Option<usize>,
     /// Size to pad the Object to
     pub target_size: Option<usize>,
+    /// The uri of the object, as mentioned in the html source (used only for printing warnings)
+    pub uri: String,
 }
 
 impl Object {
     /// Construct an Object given its content as &str and mime type
-    pub fn from_str(cont: &str, mime: &str) -> Object {
+    pub fn from_str(cont: &str, mime: &str, uri: String) -> Object {
         Object {
             kind: parse_object_kind(mime),
             content: Vec::from(cont),
             position: None,
             target_size: None,
+            uri: uri,
         }
     }
 
     /// Construct an Object given its content as a byte array and mime type
-    pub fn from_raw(raw: &[u8], mime: &str) -> Object {
+    pub fn from_raw(raw: &[u8], mime: &str, uri: String) -> Object {
         Object {
             kind: parse_object_kind(mime),
             content: raw.to_vec(),
             position: None,
             target_size: None,
+            uri: uri,
         }
     }
 

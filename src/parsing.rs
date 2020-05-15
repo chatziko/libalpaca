@@ -57,7 +57,7 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str, alias: usize) -
 
 							match fs::read(fullpath) {
 			        			Ok(data) => {
-			        				let mut object = Object::from_raw(&data,"text/css");
+			        				let mut object = Object::from_raw(&data,"text/css", String::from(relative));
 			        				object.position = Some(node.index());
 			        				objects.push(object); // Push the new object into the vector
 			        			},
@@ -74,6 +74,7 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str, alias: usize) -
 
 	// Find the images' paths in the html
     for node in document.find(Name("img")) {
+		eprint!("----image {}\n", node.html());
     	match node.attr("src") {
     		Some(path) => {
     			/* Consider the posibility that the image already has some GET parameters */
@@ -88,7 +89,7 @@ pub fn parse_objects(html: &Object, root: &str, html_path: &str, alias: usize) -
 
 				match fs::read(fullpath) {
         			Ok(data) => {
-        				let mut object = Object::from_raw(&data,"image/png");
+        				let mut object = Object::from_raw(&data, "image/png", String::from(relative));
         				object.position = Some(node.index());
         				objects.push(object); // Push the new object into the vector
         			},
