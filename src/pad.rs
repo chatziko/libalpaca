@@ -1,6 +1,6 @@
 //! Contains padding functions for different resource types.
 use rand::{thread_rng, Rng};
-use rand:: distributions::Alphanumeric;
+use rand::distributions::Alphanumeric;
 use std::iter::Extend;
 
 use objects::*;
@@ -15,7 +15,7 @@ static HTML_COMMENT_END: &'static str = "-->";
 const HTML_COMMENT_END_SIZE: usize = 3;
 
 /// Pads an html to its target size.
-pub fn get_html_padding(html: &mut Object,target_size: usize) {
+pub fn get_html_padding(html: &mut Object, target_size: usize) {
     let pad_len = target_size - html.content.len();
     let pad_len = pad_len - HTML_COMMENT_START_SIZE - HTML_COMMENT_END_SIZE;
     let mut pad = Vec::from(HTML_COMMENT_START);
@@ -26,17 +26,18 @@ pub fn get_html_padding(html: &mut Object,target_size: usize) {
 
 
 /// Pads an object to its target size.
-pub fn get_object_padding(object: &mut Object,size: usize, target_size: usize) {
+pub fn get_object_padding(object: &mut Object, size: usize, target_size: usize) {
     let pad_len = target_size - size;
     let padding;
     match object.kind {
         ObjectKind::CSS => {
-            if size + 4 > target_size { // Consider the 4 additional comment-bytes.
-                return;   
+            if size + 4 > target_size {
+                // Consider the 4 additional comment-bytes.
+                return;
             }
             padding = get_css_padding(pad_len);
-        },
-        _ => padding = get_binary_padding(pad_len)
+        }
+        _ => padding = get_binary_padding(pad_len),
     };
 
     object.content.extend(padding);
