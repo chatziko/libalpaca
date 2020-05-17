@@ -1,6 +1,5 @@
 //! Contains main morphing routines.
 use std::ptr;
-use std::path::Path;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -27,16 +26,6 @@ pub extern "C" fn morph_html_Palpaca(
 ) -> *const u8 {
     std::env::set_var("RUST_BACKTRACE", "full");
 
-    // /* Convert arguments into &str */
-    let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = match cstr_html.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            eprint!("libalpaca: cannot read html content: {}\n", e);
-            return ptr::null();       // return NULL pointer if html cannot be converted to a string
-        }
-    };
-
     let cstr_root = unsafe { CStr::from_ptr(root) };
     let root = cstr_root.to_str().unwrap();
 
@@ -51,6 +40,16 @@ pub extern "C" fn morph_html_Palpaca(
 
     let cstr_dist_obj_size = unsafe { CStr::from_ptr(dist_obj_size) };
     let dist_obj_size = cstr_dist_obj_size.to_str().unwrap();
+
+    // /* Convert arguments into &str */
+    let cstr_html = unsafe { CStr::from_ptr(html) };
+    let html = match cstr_html.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            eprint!("libalpaca: cannot read html content of {}: {}\n", html_path, e);
+            return ptr::null();       // return NULL pointer if html cannot be converted to a string
+        }
+    };
 
     let document = dom::parse_html(html);
 
@@ -113,21 +112,21 @@ pub extern "C" fn morph_html_Dalpaca(
 ) -> *const u8 {
     std::env::set_var("RUST_BACKTRACE", "full");
 
-    // /* Convert arguments into &str */
-    let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = match cstr_html.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            eprint!("libalpaca: cannot read html content: {}\n", e);
-            return ptr::null();       // return NULL pointer if html cannot be converted to a string
-        }
-    };
-
     let cstr_root = unsafe { CStr::from_ptr(root) };
     let root = cstr_root.to_str().unwrap();
 
     let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
     let html_path = cstr_html_path.to_str().unwrap();
+
+    // /* Convert arguments into &str */
+    let cstr_html = unsafe { CStr::from_ptr(html) };
+    let html = match cstr_html.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            eprint!("libalpaca: cannot read html content of {}: {}\n", html_path, e);
+            return ptr::null();       // return NULL pointer if html cannot be converted to a string
+        }
+    };
 
     let document = dom::parse_html(html);
 
@@ -203,7 +202,13 @@ fn morph_from_distribution(
     let initial_obj_no = objects.len();
 
     // Sample target number of objects (count)
-    let target_count = sample_ge(&dists.obj_num, initial_obj_no)?;
+    let target_count = match sample_ge(&dists.obj_num, initial_obj_no) {
+        Ok(c) => c,
+        Err(e) => {
+            eprint!("libalpaca: could not sample object number ({}), leaving unchanged ({})\n", e, initial_obj_no);
+            initial_obj_no
+        }
+    };
 
     // To more closely match the actual obj_size distribution, we'll sample values for all objects,
     // And then we'll use the largest to pad existing objects and the smallest for padding objects.
@@ -213,7 +218,7 @@ fn morph_from_distribution(
     // Pad existing objects
     for obj in &mut *objects {
         let needed_size = obj.content.len() +
-            (if obj.kind == ObjectKind::CSS { 4 } else { 0 });   // CSS padding needs to be at least 4.
+            match obj.kind { ObjectKind::CSS | ObjectKind::JS => 4, _ => 0 };   // CSS/JS padding needs to be at least 4.
 
         // Take the largest size, if not enough draw a new one with this specific needed_size
         obj.target_size = if target_sizes[target_sizes.len()-1] >= needed_size {
@@ -253,11 +258,8 @@ fn morph_deterministic(
     let target_count = get_multiple(obj_num, initial_obj_no);
 
     for i in 0..objects.len() {
-        let mut min_size = objects[i].content.len();
-        if objects[i].kind == ObjectKind::CSS {
-            // CSS padding needs to be at least 4.
-            min_size += 4;
-        }
+        let min_size = objects[i].content.len()
+            + match objects[i].kind { ObjectKind::CSS | ObjectKind::JS => 4, _ => 0 };
 
         let obj_target_size = get_multiple(obj_size, min_size);
         objects[i].target_size = Some(obj_target_size);
@@ -302,19 +304,13 @@ fn append_ref(object: &Object) {
 
     let node = object.node.as_ref().unwrap();
     let attr = match node.as_element().unwrap().name.local.to_lowercase().as_ref() {
-        "img" => "src",
+        "img" | "script" => "src",
         "link" => "href",
         _ => panic!("shouldn't happen"),
     };
 
-    let file_extension = Path::new(&object.uri).extension().unwrap().to_str().unwrap();
-
     // Check if there is already a GET parameter in the file path
-    let prefix = if file_extension.contains("?") {
-        '&'
-    } else {
-        '?'
-    };
+    let prefix = if object.uri.contains("?") { '&' } else { '?' };
 
     new_link.insert(0, prefix);
     new_link.insert_str(0, &object.uri);

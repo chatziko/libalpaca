@@ -30,7 +30,7 @@ pub fn get_object_padding(kind: ObjectKind, size: usize, target_size: usize) -> 
     let pad_len = target_size - size;
     let padding;
     match kind {
-        ObjectKind::CSS => {
+        ObjectKind::CSS | ObjectKind::JS => {
             if size + 4 > target_size {
                 // Consider the 4 additional comment-bytes.
                 return Vec::new();

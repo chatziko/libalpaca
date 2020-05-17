@@ -3,20 +3,17 @@ use std::{str,fs,path::Path};
 use kuchiki::traits::*;
 use kuchiki::{parse_html_with_options, NodeRef, ParseOpts};
 use html5ever::{interface::QualName,LocalName,ns,namespace_url,serialize,serialize::{SerializeOpts}};
+use aux;
 
 /// Defines our basic object types, each of which has a corresponding
 /// unique (distribution, padding type) tuple.
 #[derive(PartialEq)]
 pub enum ObjectKind {
-    /// Fake "padding" object
-    Alpaca,
-    /// HTML body
+    Alpaca,		/// Fake "padding" object
     HTML,
-    /// CSS
     CSS,
-    /// IMG: PNG, JPEG, etc.
-    IMG,
-    /// Used when our parser cannot determine the object type
+    IMG,		/// IMG: PNG, JPEG, etc.
+	JS,
     Unknown,
 }
 
@@ -36,9 +33,9 @@ pub struct Object {
 
 impl Object {
     /// Construct a real object from the html page
-    pub fn real(content: &[u8], mime: &str, uri: String, node: &NodeRef) -> Object {
+    pub fn real(content: &[u8], kind: ObjectKind, uri: String, node: &NodeRef) -> Object {
         Object {
-            kind: parse_object_kind(mime),
+            kind: kind,
             content: content.to_vec(),
             node: Some(node.clone()),
             target_size: None,
@@ -92,64 +89,43 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
 	let mut objects: Vec<Object> = Vec::with_capacity(10);
 	let mut found_favicon = false;
 
-	// Find the css files' paths in the html
-    for node_data in document.select("link").unwrap() {
+	// Find:
+	// - <img> and <link href="favicon.ico" rel="shortcut icon">
+	// - <link rel="stylesheet">
+	// - <script src="...">
+    for node_data in document.select("img,link,script").unwrap() {
 		let node = node_data.as_node();
-    	match (node_get_attribute(node, "rel"), node_get_attribute(node, "href")) {
-    		(Some(rel), Some(path)) if rel == "stylesheet" => {
-				/* Consider the posibility that the css file already has some GET parameters */
-				let split: Vec<&str> = path.split('?').collect();
-				let relative = split[0];
-				
-				let fullpath;
-				match uri_to_abs_fs_path(root,relative,html_path,alias) {
-					Some(absolute) => fullpath = absolute,
-					None => continue
-				}
+		let name = node_data.name.local.to_lowercase();
 
-				match fs::read(fullpath) {
-					Ok(data) => objects.push(Object::real(&data,"text/css", path, node)),
-					Err(_) => continue,
-				}
-			},
-    		_ => continue
-    	}   	
-    }
+		let path_attr = if name == "link" { "href" } else { "src" };
+		let path = match node_get_attribute(node, path_attr) {
+			Some(p) if p != "" && !p.starts_with("data:") => p,
+			_ => continue,
+		};
 
-	// Find the images' paths in the html (<img> tags but also <link href="favicon.ico" rel="shortcut icon">)
-    for node_data in document.select("img,link").unwrap() {
-		let node = node_data.as_node();
+		let rel = node_get_attribute(node, "rel").unwrap_or_default();
+		let kind = match (name.as_str(), rel.as_str()) {
+			("link", "stylesheet") => ObjectKind::CSS,
+			("link", "shortcut icon") | ("link", "icon") => { found_favicon = true; ObjectKind::IMG },
+			("script", _) => ObjectKind::JS,
+			("img", _) => ObjectKind::IMG,
+			_ => continue,
+		};
 
-		let mut path_attr = "src";
-		if node_data.name.local.to_lowercase() == "link" {
-			match node_get_attribute(node, "rel").unwrap_or_default().as_ref() {
-				"shortcut icon" | "icon" => {
-					found_favicon = true;
-					path_attr = "href";
-				},
-				_ => continue,
-			}
+		/* Consider the posibility that the css file already has some GET parameters */
+		let split: Vec<&str> = path.split('?').collect();
+		let relative = split[0];
+		
+		let fullpath;
+		match uri_to_abs_fs_path(root, relative, html_path, alias) {
+			Some(absolute) => fullpath = absolute,
+			None => continue
 		}
 
-    	match node_get_attribute(node, path_attr) {
-    		Some(path) => {
-    			/* Consider the posibility that the image already has some GET parameters */
-    			let split: Vec<&str> = path.split('?').collect();
-    			let relative = split[0];
-
-		    	let fullpath;
-				match uri_to_abs_fs_path(root,relative,html_path,alias) {
-					Some(absolute) => fullpath = absolute,
-					None => continue
-				}
-
-				match fs::read(fullpath) {
-        			Ok(data) => objects.push(Object::real(&data, "image/any", path, node)),
-        			Err(_) => continue,
-    			}
-    		}
-    		None => continue
-    	}   	
+		match aux::stringify_error(fs::read(&fullpath)) {
+			Ok(data) => objects.push(Object::real(&data, kind, path, node)),
+			Err(e) => { eprint!("libalpaca: cannot read {} ({})\n", fullpath, e); continue },
+		}
     }
 
 	// If no favicon was found, insert an empty one
@@ -171,7 +147,7 @@ pub fn insert_empty_favicon(document: &NodeRef) {
     };
 
 	let elem = create_element("link");
-	node_set_attribute(&elem, "href", String::from("#"));
+	node_set_attribute(&elem, "href", String::from("data:,"));
 	node_set_attribute(&elem, "rel", String::from("shortcut icon"));
 	node.append(elem);
 }
