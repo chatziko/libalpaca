@@ -1,5 +1,4 @@
 //! Contains main morphing routines.
-use std::str;
 use std::ptr;
 use std::path::Path;
 use std::ffi::CStr;
@@ -56,9 +55,7 @@ pub extern "C" fn morph_html_Palpaca(
     let document = dom::parse_html(html);
 
     let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
-    objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
-
-    let n = objects.len(); // Number of objects.
+    let orig_n = objects.len(); // Number of original objects.
 
     // Construct a Distributions object containing the given distributions.
     let dists =  match Distributions::from(dist_html, dist_obj_num, dist_obj_size) {
@@ -69,8 +66,7 @@ pub extern "C" fn morph_html_Palpaca(
         }
     };
 
-    // Try morphing for PAGE_SAMPLE_LIMIT times.
-    match morph_from_distribution(&mut objects, n, &dists) {
+    match morph_from_distribution(&mut objects, &dists) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: morph_from_distribution failed: {}\n", e);
@@ -78,7 +74,7 @@ pub extern "C" fn morph_html_Palpaca(
         }
     }
 
-    match insert_objects_refs(&document, &objects, n) {
+    match insert_objects_refs(&document, &objects, orig_n) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
@@ -136,11 +132,9 @@ pub extern "C" fn morph_html_Dalpaca(
     let document = dom::parse_html(html);
 
     let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
-    objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
+    let orig_n = objects.len(); // Number of original objects.
 
-    let n = objects.len(); // Number of objects.
-
-    match morph_deterministic(&mut objects, n, obj_num, obj_size, max_obj_size) {
+    match morph_deterministic(&mut objects, obj_num, obj_size, max_obj_size) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: cannot morph_deterministic: {}\n", e);
@@ -149,7 +143,7 @@ pub extern "C" fn morph_html_Dalpaca(
     }
 
     // Insert the GET parameter to the objects.
-    match insert_objects_refs(&document, &objects, n) {
+    match insert_objects_refs(&document, &objects, orig_n) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
@@ -203,51 +197,43 @@ pub extern "C" fn free_memory(data: *mut u8, size: usize) {
 
 fn morph_from_distribution(
     objects: &mut Vec<Object>,
-    min_count: usize,
     dists: &Distributions,
 ) -> Result<(), String> {
-    // Sample target number of objects (count) and target sizes for morphed
-    // objects.
-    let target_count =  sample_ge(&dists.obj_num, min_count)?;
+    // we'll have at least as many objects as the original ones
+    let initial_obj_no = objects.len();
 
+    // Sample target number of objects (count)
+    let target_count = sample_ge(&dists.obj_num, initial_obj_no)?;
+
+    // To more closely match the actual obj_size distribution, we'll sample values for all objects,
+    // And then we'll use the largest to pad existing objects and the smallest for padding objects.
     let mut target_sizes: Vec<usize> = sample_ge_many(&dists.obj_size, 1, target_count)?;
+    target_sizes.sort_unstable();       // ascending
 
-    // Match target sizes to objects.
-    // We will consider each target_size and decide whether to use it to pad
-    // an object or to create a new object.
-    // NOTE: We append newly created objects to the array objects.
-    // NOTE: array objects is initially sorted.
-    target_sizes.sort();
+    // Pad existing objects
+    for obj in &mut *objects {
+        let needed_size = obj.content.len() +
+            (if obj.kind == ObjectKind::CSS { 4 } else { 0 });   // CSS padding needs to be at least 4.
 
-    let initial_obj_no = objects.len(); // Keep track of initial number of objects.
-    let mut next_to_morph = 0; // Pointing at next object to morph.
-    let mut create_new_obj;
-    for s in target_sizes {
-        create_new_obj = true;
-        if (next_to_morph < initial_obj_no) && (s >= objects[next_to_morph].content.len()) {
-            create_new_obj = false;
-            if objects[next_to_morph].kind == ObjectKind::CSS && (objects[next_to_morph].content.len() + 4 > s) {
-                // CSS padding needs to be at least 4.
-                create_new_obj = true
-            }
-        }
-
-        if !create_new_obj {
-            // Pad i-th object to size s.
-            objects[next_to_morph].target_size = Some(s);
-            next_to_morph += 1;
+        // Take the largest size, if not enough draw a new one with this specific needed_size
+        obj.target_size = if target_sizes[target_sizes.len()-1] >= needed_size {
+            Some(target_sizes.pop().unwrap())
         } else {
-            objects.push(Object::padding(s));
-        }
+            match sample_ge(&dists.obj_size, needed_size) {
+                Ok(size) => Some(size),
+                Err(e) => {
+                    eprint!("libalpaca: warning: no padding was found for {} ({})\n", obj.uri, e);
+                    None
+                },
+            }
+        };
+
+        eprint!("lala {} -> {}   {}\n", obj.content.len(), obj.target_size.unwrap_or(999), obj.uri);
     }
 
-    // No proper padding was found for some object. Continue without padding these objects, but print warning.
-    if next_to_morph < initial_obj_no {
-        let missing: Vec<&str> = objects[next_to_morph..initial_obj_no].into_iter().map(|o| o.uri.as_str()).collect();
-        eprint!(
-            "libalpaca: warning: no padding was found for the following objects:\n\t{}\n",
-            missing.join("\n\t")
-        );
+    // create padding objects, using the smallest of the sizes
+    for i in 0..target_count - initial_obj_no {
+        objects.push(Object::padding(target_sizes[i]));
     }
 
     Ok(())
@@ -255,16 +241,18 @@ fn morph_from_distribution(
 
 fn morph_deterministic(
     objects: &mut Vec<Object>,
-    min_count: usize,
     obj_num: usize,
     obj_size: usize,
     max_obj_size: usize,
 ) -> Result<(), String> {
+    // we'll have at least as many objects as the original ones
+    let initial_obj_no = objects.len();
+
     // Sample target number of objects (count) and target sizes for morphed
     // objects. Count is a multiple of "obj_num" and bigger than "min_count".
     // Target size for each objects is a multiple of "obj_size" and bigger
     // than the object's  original size.
-    let target_count = get_multiple(obj_num, min_count);
+    let target_count = get_multiple(obj_num, initial_obj_no);
 
     for i in 0..objects.len() {
         let mut min_size = objects[i].content.len();
@@ -277,7 +265,7 @@ fn morph_deterministic(
         objects[i].target_size = Some(obj_target_size);
     }
 
-    let fake_objects_count = target_count - min_count; // The number of fake objects.
+    let fake_objects_count = target_count - initial_obj_no; // The number of fake objects.
 
     // To get the target size of each fake object, sample uniformly a multiple
     // of "obj_size" which is smaller than "max_obj_size".

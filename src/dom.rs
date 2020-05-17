@@ -94,34 +94,24 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
 	// Find the css files' paths in the html
     for node_data in document.select("link").unwrap() {
 		let node = node_data.as_node();
-    	match node_get_attribute(node, "rel") {
-    		Some(rel) => {
-    			if rel == "stylesheet" {
-    				match node_get_attribute(node, "href") {
-    					Some(path) => {
-    						/* Consider the posibility that the css file already has some GET parameters */
-    						let split: Vec<&str> = path.split('?').collect();
-    						let relative = split[0];
-    						
-    						let fullpath;
-    						match uri_to_abs_fs_path(root,relative,html_path,alias) {
-    							Some(absolute) => fullpath = absolute,
-    							None => continue
-    						}
+    	match (node_get_attribute(node, "rel"), node_get_attribute(node, "href")) {
+    		(Some(rel), Some(path)) if rel == "stylesheet" => {
+				/* Consider the posibility that the css file already has some GET parameters */
+				let split: Vec<&str> = path.split('?').collect();
+				let relative = split[0];
+				
+				let fullpath;
+				match uri_to_abs_fs_path(root,relative,html_path,alias) {
+					Some(absolute) => fullpath = absolute,
+					None => continue
+				}
 
-							match fs::read(fullpath) {
-			        			Ok(data) => {
-			        				let object = Object::real(&data,"text/css", path, node);
-			        				objects.push(object); // Push the new object into the vector
-			        			},
-			        			Err(_) => continue
-			    			}
-    					}
-    					None => continue
-    				}
-    			}
-    		}
-    		None => continue
+				match fs::read(fullpath) {
+					Ok(data) => objects.push(Object::real(&data,"text/css", path, node)),
+					Err(_) => continue,
+				}
+			},
+    		_ => continue
     	}   	
     }
 
@@ -141,17 +131,15 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
 				}
 
 				match fs::read(fullpath) {
-        			Ok(data) => {
-        				let object = Object::real(&data, "image/png", path, node);
-        				objects.push(object); // Push the new object into the vector
-        			},
-        			Err(_) => continue
+        			Ok(data) => objects.push(Object::real(&data, "image/png", path, node)),
+        			Err(_) => continue,
     			}
     		}
     		None => continue
     	}   	
     }
 
+    objects.sort_unstable_by(|a, b| b.content.len().cmp(&a.content.len()));		// larger first
 	objects
 }
 
