@@ -66,8 +66,7 @@ pub fn parse_object_kind(mime: &str) -> ObjectKind {
 	match mime {
 		"text/html" => ObjectKind::HTML,
 		"text/css" => ObjectKind::CSS,
-    	"image/png" => ObjectKind::IMG,
-    	"image/jpeg" => ObjectKind::IMG,
+		x if x.starts_with("image/") => ObjectKind::IMG,
     	_=> ObjectKind::Unknown
     }
 }
@@ -87,9 +86,11 @@ pub fn parse_target_size(query: &str) -> usize {
 }
 
 /// Parses the objects contained in an HTML page.
+//
 pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usize) -> Vec<Object> {
 	//Objects vector
 	let mut objects: Vec<Object> = Vec::with_capacity(10);
+	let mut found_favicon = false;
 
 	// Find the css files' paths in the html
     for node_data in document.select("link").unwrap() {
@@ -115,10 +116,22 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
     	}   	
     }
 
-	// Find the images' paths in the html
-    for node_data in document.select("img").unwrap() {
+	// Find the images' paths in the html (<img> tags but also <link href="favicon.ico" rel="shortcut icon">)
+    for node_data in document.select("img,link").unwrap() {
 		let node = node_data.as_node();
-    	match node_get_attribute(node, "src") {
+
+		let mut path_attr = "src";
+		if node_data.name.local.to_lowercase() == "link" {
+			match node_get_attribute(node, "rel").unwrap_or_default().as_ref() {
+				"shortcut icon" | "icon" => {
+					found_favicon = true;
+					path_attr = "href";
+				},
+				_ => continue,
+			}
+		}
+
+    	match node_get_attribute(node, path_attr) {
     		Some(path) => {
     			/* Consider the posibility that the image already has some GET parameters */
     			let split: Vec<&str> = path.split('?').collect();
@@ -131,7 +144,7 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
 				}
 
 				match fs::read(fullpath) {
-        			Ok(data) => objects.push(Object::real(&data, "image/png", path, node)),
+        			Ok(data) => objects.push(Object::real(&data, "image/any", path, node)),
         			Err(_) => continue,
     			}
     		}
@@ -139,8 +152,28 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
     	}   	
     }
 
+	// If no favicon was found, insert an empty one
+	if !found_favicon {
+		insert_empty_favicon(document);
+	}
+
     objects.sort_unstable_by(|a, b| b.content.len().cmp(&a.content.len()));		// larger first
 	objects
+}
+
+pub fn insert_empty_favicon(document: &NodeRef) {
+    // append the <link> either to the <head> tag, if exists, otherwise
+    // to the whole document
+    let node_data;  // to outlive the match
+    let node = match document.select("head").unwrap().next() {
+        Some(nd) => { node_data = nd; node_data.as_node() },
+        None => document,
+    };
+
+	let elem = create_element("link");
+	node_set_attribute(&elem, "href", String::from("#"));
+	node_set_attribute(&elem, "rel", String::from("shortcut icon"));
+	node.append(elem);
 }
 
 /// Maps a (relative or absolute) uri, to an absolute filesystem path.
@@ -210,14 +243,6 @@ pub fn serialize_html(dom: &NodeRef) -> Vec<u8> {
 
     buf
 }
-
-// fn qual_name_to_string(name: &QualName) -> String {
-//     if name.ns == ns!(html) || name.ns.is_empty() {
-//         name.local.to_lowercase()
-//     } else {
-//         format!("{}:{}", name.ns.to_lowercase(), name.local.to_lowercase())
-//     }
-// }
 
 pub fn create_element(name: &str) -> NodeRef {
     let qual_name = QualName::new(None, ns!(), LocalName::from(name));

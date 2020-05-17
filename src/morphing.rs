@@ -300,10 +300,11 @@ fn append_ref(object: &Object) {
     let mut new_link = String::from("alpaca-padding=");
     new_link.push_str(&(object.target_size.unwrap().to_string())); // Append the target size
 
-    let attr = match object.kind {
-        ObjectKind::IMG => "src",
-        ObjectKind::CSS => "href",
-        _ => "",
+    let node = object.node.as_ref().unwrap();
+    let attr = match node.as_element().unwrap().name.local.to_lowercase().as_ref() {
+        "img" => "src",
+        "link" => "href",
+        _ => panic!("shouldn't happen"),
     };
 
     let file_extension = Path::new(&object.uri).extension().unwrap().to_str().unwrap();
@@ -318,7 +319,7 @@ fn append_ref(object: &Object) {
     new_link.insert(0, prefix);
     new_link.insert_str(0, &object.uri);
 
-    dom::node_set_attribute(object.node.as_ref().unwrap(), attr, new_link);
+    dom::node_set_attribute(node, attr, new_link);
 }
 
 /// Adds the fake ALPaCA objects in the end of the html body
@@ -334,7 +335,7 @@ fn add_padding_objects(document: &NodeRef, objects: &[Object]) {
 
     for object in objects {
         let elem = dom::create_element("img");
-        dom::node_set_attribute(&elem, "src", format!("__alpaca_fake_image.png?alpaca-padding={}", object.target_size.unwrap()));
+        dom::node_set_attribute(&elem, "src", format!("/__alpaca_fake_image.png?alpaca-padding={}", object.target_size.unwrap()));
         dom::node_set_attribute(&elem, "style", String::from("visibility:hidden"));
         node.append(elem);
     }
