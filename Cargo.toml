@@ -14,7 +14,8 @@ crate-type = ["staticlib", "cdylib"]
 [dependencies]
 rand = "0.7"
 rand_distr = "0.2.1"
-select = "0.4.2"
+html5ever = "0.25.1"
+kuchiki = "0.8.0"
 
 [profile.dev]     # for cargo build (without --release)
 debug = true      # include debug symbols

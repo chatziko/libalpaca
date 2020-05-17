@@ -3,7 +3,7 @@ use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use std::iter::Extend;
 
-use objects::*;
+use dom::{ObjectKind};
 
 static CSS_COMMENT_START: &'static str = "/*";
 const CSS_COMMENT_START_SIZE: usize = 2;
@@ -15,32 +15,32 @@ static HTML_COMMENT_END: &'static str = "-->";
 const HTML_COMMENT_END_SIZE: usize = 3;
 
 /// Pads an html to its target size.
-pub fn get_html_padding(html: &mut Object, target_size: usize) {
-    let pad_len = target_size - html.content.len();
+pub fn get_html_padding(content: &mut Vec<u8>, target_size: usize) {
+    let pad_len = target_size - content.len();
     let pad_len = pad_len - HTML_COMMENT_START_SIZE - HTML_COMMENT_END_SIZE;
     let mut pad = Vec::from(HTML_COMMENT_START);
     add_random_chars(&mut pad, pad_len);
     pad.extend(Vec::from(HTML_COMMENT_END));
-    html.content.extend(pad);
+    content.extend(pad);
 }
 
 
 /// Pads an object to its target size.
-pub fn get_object_padding(object: &mut Object, size: usize, target_size: usize) {
+pub fn get_object_padding(kind: ObjectKind, size: usize, target_size: usize) -> Vec<u8> {
     let pad_len = target_size - size;
     let padding;
-    match object.kind {
+    match kind {
         ObjectKind::CSS => {
             if size + 4 > target_size {
                 // Consider the 4 additional comment-bytes.
-                return;
+                return Vec::new();
             }
             padding = get_css_padding(pad_len);
         }
         _ => padding = get_binary_padding(pad_len),
     };
 
-    object.content.extend(padding);
+    padding
 }
 
 fn get_css_padding(pad_len: usize) -> Vec<u8> {

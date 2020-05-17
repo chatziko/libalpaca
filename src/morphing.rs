@@ -4,15 +4,14 @@ use std::ptr;
 use std::path::Path;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use select::document::Document;
-use select::predicate::Name;
 
 use pad::{get_html_padding, get_object_padding};
-use objects::*;
-use parsing::{parse_objects, parse_target_size};
+use dom;
+use dom::{Object,ObjectKind};
 use distribution::{Distributions, sample_ge, sample_ge_many};
 use deterministic::*;
-use aux::*;
+
+use kuchiki::NodeRef;
 
 /// It samples a new page using probabilistic morphing, changes the
 /// references to its objects accordingly, and pads it.
@@ -54,8 +53,9 @@ pub extern "C" fn morph_html_Palpaca(
     let cstr_dist_obj_size = unsafe { CStr::from_ptr(dist_obj_size) };
     let dist_obj_size = cstr_dist_obj_size.to_str().unwrap();
 
-    let mut object = Object::from_str(html, "text/html", String::from(html_path)); // The html object.
-    let mut objects = parse_objects(&object, root, html_path, alias); // Vector of objects found in the html.
+    let document = dom::parse_html(html);
+
+    let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
     objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
 
     let n = objects.len(); // Number of objects.
@@ -65,8 +65,7 @@ pub extern "C" fn morph_html_Palpaca(
         Ok(result) => result,
         Err(e) => {
             eprint!("libalpace: cannot load distributions: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         }
     };
 
@@ -75,35 +74,32 @@ pub extern "C" fn morph_html_Palpaca(
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: morph_from_distribution failed: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         }
     }
 
-    match insert_objects_refs(&mut object, &objects, n) {
+    match insert_objects_refs(&document, &objects, n) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         }
     }
 
     // Sample the target HTML page size.
-    let html_min_size = object.content.len() + 7; // Plus 7 because of the comment characters.
+    let mut content = dom::serialize_html(&document);
+    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
     let target_size = match sample_ge(&dists.html, html_min_size) {
         Ok(size) => size,
         Err(e) => {
             eprint!("libalpaca: cannot sample html page size: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         } 
     };
 
-    get_html_padding(&mut object, target_size); // Pad the html to the target size.
+    get_html_padding(&mut content, target_size); // Pad the html to the target size.
 
-    *html_size = object.content.len();
-    object.as_ptr()
+    return content_to_c(content, html_size);
 }
 
 /// It samples a new page using deterministic morphing, changes the
@@ -119,6 +115,8 @@ pub extern "C" fn morph_html_Dalpaca(
     html_size: &mut usize,
     alias: usize,
 ) -> *const u8 {
+    std::env::set_var("RUST_BACKTRACE", "full");
+
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
     let html = match cstr_html.to_str() {
@@ -135,8 +133,9 @@ pub extern "C" fn morph_html_Dalpaca(
     let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
     let html_path = cstr_html_path.to_str().unwrap();
 
-    let mut object = Object::from_str(html, "text/html", String::from(html_path)); // The html object.
-    let mut objects = parse_objects(&object, root, html_path, alias); // Vector of objects found in the html.
+    let document = dom::parse_html(html);
+
+    let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
     objects.sort_unstable_by(|a, b| a.content.len().cmp(&b.content.len()));
 
     let n = objects.len(); // Number of objects.
@@ -145,28 +144,26 @@ pub extern "C" fn morph_html_Dalpaca(
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: cannot morph_deterministic: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         },
     }
 
     // Insert the GET parameter to the objects.
-    match insert_objects_refs(&mut object, &objects, n) {
+    match insert_objects_refs(&document, &objects, n) {
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
-            *html_size = object.content.len();
-            return object.as_ptr();
+            return document_to_c(&document, html_size);
         }
     }
 
-    let html_min_size = object.content.len() + 7; // Plus 7 because of the comment characters.
+    let mut content = dom::serialize_html(&document);
+    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
     let target_size = get_multiple(obj_size, html_min_size); // Target size for the html is a multiple of "obj_size".
 
-    get_html_padding(&mut object, target_size); // Pad the html to the target size.
+    get_html_padding(&mut content, target_size); // Pad the html to the target size.
 
-    *html_size = object.content.len();
-    object.as_ptr()
+    return content_to_c(content, html_size);
 }
 
 /// Returns the object's padding.
@@ -178,25 +175,20 @@ pub extern "C" fn morph_object(
 ) -> *const u8 {
 
     let cstr_kind = unsafe { CStr::from_ptr(kind) };
-    let kind = cstr_kind.to_str().unwrap();
+    let kind = dom::parse_object_kind(cstr_kind.to_str().unwrap());
 
     let cstr_query = unsafe { CStr::from_ptr(query) };
     let query = cstr_query.to_str().unwrap();
 
-
-    let mut object = Object::from_str("", kind, String::new());
-    let target_size = parse_target_size(query);
-
+    let target_size = dom::parse_target_size(query);
     if (target_size == 0) || (target_size <= *size) {
         // Target size has to be greater than current size.
-        *size = 0;
-        return object.as_ptr();
+        return content_to_c(Vec::new(), size);
     }
 
-    get_object_padding(&mut object, *size, target_size); // Get the padding for the object.
+    let padding = get_object_padding(kind, *size, target_size); // Get the padding for the object.
 
-    *size = object.content.len(); // Update the size to contain the number of the padding bytes.
-    object.as_ptr()
+    return content_to_c(padding, size);
 }
 
 /// Frees memory allocated in rust.
@@ -245,15 +237,7 @@ fn morph_from_distribution(
             objects[next_to_morph].target_size = Some(s);
             next_to_morph += 1;
         } else {
-            // Create new padding object.
-            let o = Object {
-                kind: ObjectKind::Alpaca,
-                content: Vec::new(),
-                position: None,
-                target_size: Some(s),
-                uri: String::from("pad_object"),
-            };
-            objects.push(o);
+            objects.push(Object::padding(s));
         }
     }
 
@@ -301,60 +285,31 @@ fn morph_deterministic(
 
     // Add the fake objects to the vector.
     for i in 0..fake_objects_count {
-        // Create new padding object.
-        let o = Object {
-            kind: ObjectKind::Alpaca,
-            content: Vec::new(),
-            position: None,
-            target_size: Some(fake_objects_sizes[i]),
-            uri: String::from("pad_object"),
-        };
-        objects.push(o);
+        objects.push(Object::padding(fake_objects_sizes[i]));
     }
 
     Ok(())
 }
 
 /// Inserts the ALPaCA GET parameters to the html objects, and adds the fake objects to the html.
-fn insert_objects_refs(html: &mut Object, objects: &[Object], n: usize) -> Result<(), String> {
+fn insert_objects_refs(document: &NodeRef, objects: &[Object], n: usize) -> Result<(), String> {
     let init_obj = &objects[0..n]; // Slice which contains initial objects
     let padding_obj = &objects[n..]; // Slice which contains ALPaCA objects
 
-    let html_str = stringify_error(str::from_utf8(&html.content))?; // Original html str
-    let mut html_string = html_str.to_string(); // Original html String
-    let mut document = Document::from(html_str);
-
     for object in init_obj {
         // ignore objects without target size
-        if object.target_size.is_none() {
-            continue;
+        if !object.target_size.is_none() {
+            append_ref(&object);
         }
-
-        let new_elem = append_ref(&document, &object);
-        if new_elem == "" {
-            continue;
-        }
-        // Replace the element in the html String
-        let pos = object.position.unwrap();
-        let elem = document.nth(pos).unwrap().html();
-
-        html_string = html_string.replacen(&elem, &new_elem, 1);
     }
 
-    // Update the document with the new html String
-    document = Document::from(str::from_utf8(&html_string.into_bytes()).unwrap());
-    // Add the fake ALPaCA objects
-    html_string = add_padding_objects(&document, padding_obj);
-
-    html_string.insert_str(0, "<!DOCTYPE html>");
-    html.content = html_string.into_bytes();
+    add_padding_objects(&document, padding_obj);
 
     Ok(())
-
 }
 
 /// Appends the ALPaCA GET parameter to an html element
-fn append_ref(document: &Document, object: &Object) -> String {
+fn append_ref(object: &Object) {
     // Construct the link with the appended new parameter
     let mut new_link = String::from("alpaca-padding=");
     new_link.push_str(&(object.target_size.unwrap().to_string())); // Append the target size
@@ -365,14 +320,7 @@ fn append_ref(document: &Document, object: &Object) -> String {
         _ => "",
     };
 
-    let link = String::from(
-        document
-            .nth(object.position.unwrap())
-            .unwrap()
-            .attr(attr)
-            .unwrap(),
-    ); // Object's path
-    let file_extension = Path::new(&link).extension().unwrap().to_str().unwrap();
+    let file_extension = Path::new(&object.uri).extension().unwrap().to_str().unwrap();
 
     // Check if there is already a GET parameter in the file path
     let prefix = if file_extension.contains("?") {
@@ -382,39 +330,43 @@ fn append_ref(document: &Document, object: &Object) -> String {
     };
 
     new_link.insert(0, prefix);
-    new_link.insert_str(0, &link);
+    new_link.insert_str(0, &object.uri);
 
-    let pos = object.position.unwrap();
-    let element = document.nth(pos).unwrap().html();
-    element.replace(&link, &new_link)
+    dom::node_set_attribute(object.node.as_ref().unwrap(), attr, new_link);
 }
 
 /// Adds the fake ALPaCA objects in the end of the html body
-fn add_padding_objects(document: &Document, objects: &[Object]) -> String {
-    // Find the document's node which corresponds to the html body
-    for i in 0..document.nodes.len() {
-        if document.nth(i).unwrap().name().is_none() {
-            continue;
-        }
-        if document.nth(i).unwrap().name().unwrap() == "body" {
-            let mut body = document.nth(i).unwrap().inner_html();
-            for object in objects {
-                let elem = format!(
-                    "<img src=\"/__alpaca_fake_image.png?alpaca-padding={}\" style=\"visibility:hidden\">\n",
-                    object.target_size.unwrap().to_string()
-                );
-                body.push_str(&elem);
-            }
-            body.insert_str(0, "<body>");
-            body.push_str("</body>");
+fn add_padding_objects(document: &NodeRef, objects: &[Object]) {
 
-            // Return the new html which contains the padding objects in its body.
-            return (document.find(Name("html")).next().unwrap().html())
-                .replace(&document.nth(i).unwrap().html(), &body);
+    // append the objects either to the <body> tag, if exists, otherwise
+    // to the whole document
+    let node_data;  // to outlive the match
+    let node = match document.select("body").unwrap().next() {
+        Some(nd) => { node_data = nd; node_data.as_node() },
+        None => document,
+    };
 
-        }
+    for object in objects {
+        let elem = dom::create_element("img");
+        dom::node_set_attribute(&elem, "src", format!("__alpaca_fake_image.png?alpaca-padding={}", object.target_size.unwrap()));
+        dom::node_set_attribute(&elem, "style", String::from("visibility:hidden"));
+        node.append(elem);
     }
+}
 
-    // Return the original html if there was no node named body
-    document.find(Name("html")).next().unwrap().html()
+// Builds the returned html, stores its size in html_size and returns a
+// 'forgotten' unsafe pointer to the html, for returning to C
+//
+fn document_to_c(document: &NodeRef, html_size: &mut usize) -> *const u8 {
+    let content = dom::serialize_html(document);
+    return content_to_c(content, html_size);
+}
+
+fn content_to_c(content: Vec<u8>, size: &mut usize) -> *const u8 {
+    *size = content.len();
+
+    let mut buf = content.into_boxed_slice();
+    let data = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    data
 }
