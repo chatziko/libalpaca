@@ -227,8 +227,6 @@ fn morph_from_distribution(
                 },
             }
         };
-
-        eprint!("lala {} -> {}   {}\n", obj.content.len(), obj.target_size.unwrap_or(999), obj.uri);
     }
 
     // create padding objects, using the smallest of the sizes
