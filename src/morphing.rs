@@ -18,6 +18,7 @@ pub extern "C" fn morph_html_Palpaca(
     html: *const c_char,
     root: *const c_char,
     html_path: *const c_char,
+    http_host: *const c_char,
     dist_html: *const c_char,
     dist_obj_num: *const c_char,
     dist_obj_size: *const c_char,
@@ -31,6 +32,9 @@ pub extern "C" fn morph_html_Palpaca(
 
     let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
     let html_path = cstr_html_path.to_str().unwrap();
+
+    let cstr_http_host = unsafe { CStr::from_ptr(http_host) };
+    let http_host = cstr_http_host.to_str().unwrap();
 
     let cstr_dist_html = unsafe { CStr::from_ptr(dist_html) };
     let dist_html = cstr_dist_html.to_str().unwrap();
@@ -53,7 +57,9 @@ pub extern "C" fn morph_html_Palpaca(
 
     let document = dom::parse_html(html);
 
-    let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
+    let full_root = String::from(root).replace("$http_host", http_host);
+
+    let mut objects = dom::parse_objects(&document, full_root.as_str(), html_path, alias); // Vector of objects found in the html.
     let orig_n = objects.len(); // Number of original objects.
 
     // Construct a Distributions object containing the given distributions.
@@ -104,6 +110,7 @@ pub extern "C" fn morph_html_Dalpaca(
     html: *const c_char,
     root: *const c_char,
     html_path: *const c_char,
+    http_host: *const c_char,
     obj_num: usize,
     obj_size: usize,
     max_obj_size: usize,
@@ -118,6 +125,9 @@ pub extern "C" fn morph_html_Dalpaca(
     let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
     let html_path = cstr_html_path.to_str().unwrap();
 
+    let cstr_http_host = unsafe { CStr::from_ptr(http_host) };
+    let http_host = cstr_http_host.to_str().unwrap();
+
     // /* Convert arguments into &str */
     let cstr_html = unsafe { CStr::from_ptr(html) };
     let html = match cstr_html.to_str() {
@@ -130,7 +140,9 @@ pub extern "C" fn morph_html_Dalpaca(
 
     let document = dom::parse_html(html);
 
-    let mut objects = dom::parse_objects(&document, root, html_path, alias); // Vector of objects found in the html.
+    let full_root = String::from(root).replace("$http_host", http_host);
+
+    let mut objects = dom::parse_objects(&document, full_root.as_str(), html_path, alias); // Vector of objects found in the html.
     let orig_n = objects.len(); // Number of original objects.
 
     match morph_deterministic(&mut objects, obj_num, obj_size, max_obj_size) {
