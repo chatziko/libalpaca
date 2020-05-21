@@ -84,7 +84,7 @@ pub fn parse_target_size(query: &str) -> usize {
 
 /// Parses the objects contained in an HTML page.
 //
-pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usize) -> Vec<Object> {
+pub fn parse_objects(document: &NodeRef, root: &str, uri: &str, alias: usize) -> Vec<Object> {
 	//Objects vector
 	let mut objects: Vec<Object> = Vec::with_capacity(10);
 	let mut found_favicon = false;
@@ -117,7 +117,7 @@ pub fn parse_objects(document: &NodeRef, root: &str, html_path: &str, alias: usi
 		let relative = split[0];
 		
 		let fullpath;
-		match uri_to_abs_fs_path(root, relative, html_path, alias) {
+		match uri_to_abs_fs_path(root, relative, uri, alias) {
 			Some(absolute) => fullpath = absolute,
 			None => continue
 		}
@@ -154,7 +154,7 @@ pub fn insert_empty_favicon(document: &NodeRef) {
 
 /// Maps a (relative or absolute) uri, to an absolute filesystem path.
 /// Returns None if uri_path is located in another server
-fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize) -> Option<String> {
+fn uri_to_abs_fs_path(root: &str, relative: &str, page_uri: &str, alias: usize) -> Option<String> {
 	if relative.starts_with("https://") || relative.starts_with("http://") {
 		return None;
 	}
@@ -162,7 +162,7 @@ fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize)
 	let mut fs_relative = String::from(relative);
 
 	if !fs_relative.starts_with('/') {
-		let base = Path::new(html_path).parent().unwrap().to_str().unwrap();
+		let base = Path::new(page_uri).parent().unwrap().to_str().unwrap();
 		
 		if !base.ends_with('/') {
 			fs_relative.insert(0,'/');
@@ -189,7 +189,7 @@ fn uri_to_abs_fs_path(root: &str, relative: &str, html_path: &str, alias: usize)
 
 	let mut absolute: String = normalized.into_iter().collect(); // String with the resolved relative path
 
-	if html_path[..alias] != absolute[..alias] {
+	if page_uri[..alias] != absolute[..alias] {
 		return None;
 	}
 

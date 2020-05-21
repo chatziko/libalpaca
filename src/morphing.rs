@@ -1,57 +1,58 @@
 //! Contains main morphing routines.
-use std::ptr;
 use std::ffi::CStr;
-use std::os::raw::c_char;
-
 use pad::{get_html_padding, get_object_padding};
 use dom;
 use dom::{Object,ObjectKind};
 use distribution::{Distributions, sample_ge, sample_ge_many};
 use deterministic::*;
+use aux::stringify_error;
 
 use kuchiki::NodeRef;
+
+#[repr(C)]
+pub struct MorphInfo {
+    // request info
+    content: *const u8,     // u8 = uchar
+    size: usize,
+    root: *const u8,
+    uri: *const u8,
+    http_host: *const u8,
+    alias: usize,
+    query: *const u8,       // part after ?
+    content_type: *const u8,
+
+    probabilistic: usize,   // boolean
+
+    // for probabilistic
+    dist_html_size: *const u8,
+    dist_obj_number: *const u8,
+    dist_obj_size: *const u8,
+
+    // for deterministic
+    obj_num: usize,
+    obj_size: usize,
+    max_obj_size: usize,
+}
 
 /// It samples a new page using probabilistic morphing, changes the
 /// references to its objects accordingly, and pads it.
 #[no_mangle]
-pub extern "C" fn morph_html_Palpaca(
-    html: *const c_char,
-    root: *const c_char,
-    html_path: *const c_char,
-    http_host: *const c_char,
-    dist_html: *const c_char,
-    dist_obj_num: *const c_char,
-    dist_obj_size: *const c_char,
-    html_size: &mut usize,
-    alias: usize,
-) -> *const u8 {
+pub extern "C" fn morph_html(pinfo: *mut MorphInfo) -> u8 {
+
+    
     std::env::set_var("RUST_BACKTRACE", "full");
+    let info = unsafe { &mut *pinfo };
 
-    let cstr_root = unsafe { CStr::from_ptr(root) };
-    let root = cstr_root.to_str().unwrap();
-
-    let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
-    let html_path = cstr_html_path.to_str().unwrap();
-
-    let cstr_http_host = unsafe { CStr::from_ptr(http_host) };
-    let http_host = cstr_http_host.to_str().unwrap();
-
-    let cstr_dist_html = unsafe { CStr::from_ptr(dist_html) };
-    let dist_html = cstr_dist_html.to_str().unwrap();
-
-    let cstr_dist_obj_num = unsafe { CStr::from_ptr(dist_obj_num) };
-    let dist_obj_num = cstr_dist_obj_num.to_str().unwrap();
-
-    let cstr_dist_obj_size = unsafe { CStr::from_ptr(dist_obj_size) };
-    let dist_obj_size = cstr_dist_obj_size.to_str().unwrap();
+    let root = c_string_to_str(info.root).unwrap();
+    let uri = c_string_to_str(info.uri).unwrap();
+    let http_host = c_string_to_str(info.http_host).unwrap();
 
     // /* Convert arguments into &str */
-    let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = match cstr_html.to_str() {
+    let html = match c_string_to_str(info.content) {
         Ok(s) => s,
         Err(e) => {
-            eprint!("libalpaca: cannot read html content of {}: {}\n", html_path, e);
-            return ptr::null();       // return NULL pointer if html cannot be converted to a string
+            eprint!("libalpaca: cannot read html content of {}: {}\n", uri, e);
+            return 0;       // return NULL pointer if html cannot be converted to a string
         }
     };
 
@@ -59,23 +60,42 @@ pub extern "C" fn morph_html_Palpaca(
 
     let full_root = String::from(root).replace("$http_host", http_host);
 
-    let mut objects = dom::parse_objects(&document, full_root.as_str(), html_path, alias); // Vector of objects found in the html.
+    let mut objects = dom::parse_objects(&document, full_root.as_str(), uri, info.alias); // Vector of objects found in the html.
     let orig_n = objects.len(); // Number of original objects.
 
-    // Construct a Distributions object containing the given distributions.
-    let dists =  match Distributions::from(dist_html, dist_obj_num, dist_obj_size) {
-        Ok(result) => result,
-        Err(e) => {
-            eprint!("libalpace: cannot load distributions: {}\n", e);
-            return document_to_c(&document, html_size);
-        }
-    };
+    let mut dists: Option<Distributions> = None;
 
-    match morph_from_distribution(&mut objects, &dists) {
-        Ok(_) => {},
-        Err(e) => {
-            eprint!("libalpaca: morph_from_distribution failed: {}\n", e);
-            return document_to_c(&document, html_size);
+    if info.probabilistic != 0 {
+        // Probabilistic alpaca
+        // Construct a Distributions object containing the given distributions.
+        let dist_html_size = c_string_to_str(info.dist_html_size).unwrap();
+        let dist_obj_number = c_string_to_str(info.dist_obj_number).unwrap();
+        let dist_obj_size = c_string_to_str(info.dist_obj_size).unwrap();
+
+        dists = match Distributions::from(dist_html_size, dist_obj_number, dist_obj_size) {
+            Ok(result) => Some(result),
+            Err(e) => {
+                eprint!("libalpace: cannot load distributions: {}\n", e);
+                return document_to_c(&document, info);
+            }
+        };
+
+        match morph_from_distribution(&mut objects, dists.as_ref().unwrap()) {
+            Ok(_) => {},
+            Err(e) => {
+                eprint!("libalpaca: morph_from_distribution failed: {}\n", e);
+                return document_to_c(&document, info);
+            }
+        }
+
+    } else {
+        // Deterministic alpaca
+        match morph_deterministic(&mut objects, info.obj_num, info.obj_size, info.max_obj_size) {
+            Ok(_) => {},
+            Err(e) => {
+                eprint!("libalpaca: cannot morph_deterministic: {}\n", e);
+                return document_to_c(&document, info);
+            },
         }
     }
 
@@ -83,122 +103,59 @@ pub extern "C" fn morph_html_Palpaca(
         Ok(_) => {},
         Err(e) => {
             eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
-            return document_to_c(&document, html_size);
-        }
-    }
-
-    // Sample the target HTML page size.
-    let mut content = dom::serialize_html(&document);
-    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
-    let target_size = match sample_ge(&dists.html, html_min_size) {
-        Ok(size) => size,
-        Err(e) => {
-            eprint!("libalpaca: cannot sample html page size: {}\n", e);
-            return document_to_c(&document, html_size);
-        } 
-    };
-
-    get_html_padding(&mut content, target_size); // Pad the html to the target size.
-
-    return content_to_c(content, html_size);
-}
-
-/// It samples a new page using deterministic morphing, changes the
-/// references to its objects accordingly, and pads it.
-#[no_mangle]
-pub extern "C" fn morph_html_Dalpaca(
-    html: *const c_char,
-    root: *const c_char,
-    html_path: *const c_char,
-    http_host: *const c_char,
-    obj_num: usize,
-    obj_size: usize,
-    max_obj_size: usize,
-    html_size: &mut usize,
-    alias: usize,
-) -> *const u8 {
-    std::env::set_var("RUST_BACKTRACE", "full");
-
-    let cstr_root = unsafe { CStr::from_ptr(root) };
-    let root = cstr_root.to_str().unwrap();
-
-    let cstr_html_path = unsafe { CStr::from_ptr(html_path) };
-    let html_path = cstr_html_path.to_str().unwrap();
-
-    let cstr_http_host = unsafe { CStr::from_ptr(http_host) };
-    let http_host = cstr_http_host.to_str().unwrap();
-
-    // /* Convert arguments into &str */
-    let cstr_html = unsafe { CStr::from_ptr(html) };
-    let html = match cstr_html.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            eprint!("libalpaca: cannot read html content of {}: {}\n", html_path, e);
-            return ptr::null();       // return NULL pointer if html cannot be converted to a string
-        }
-    };
-
-    let document = dom::parse_html(html);
-
-    let full_root = String::from(root).replace("$http_host", http_host);
-
-    let mut objects = dom::parse_objects(&document, full_root.as_str(), html_path, alias); // Vector of objects found in the html.
-    let orig_n = objects.len(); // Number of original objects.
-
-    match morph_deterministic(&mut objects, obj_num, obj_size, max_obj_size) {
-        Ok(_) => {},
-        Err(e) => {
-            eprint!("libalpaca: cannot morph_deterministic: {}\n", e);
-            return document_to_c(&document, html_size);
-        },
-    }
-
-    // Insert the GET parameter to the objects.
-    match insert_objects_refs(&document, &objects, orig_n) {
-        Ok(_) => {},
-        Err(e) => {
-            eprint!("libalpaca: insert_objects_refs failed: {}\n", e);
-            return document_to_c(&document, html_size);
+            return document_to_c(&document, info);
         }
     }
 
     let mut content = dom::serialize_html(&document);
+
+    // find target size
     let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
-    let target_size = get_multiple(obj_size, html_min_size); // Target size for the html is a multiple of "obj_size".
+    let target_size =
+        if info.probabilistic != 0 {
+            match sample_ge(&(dists.unwrap().html), html_min_size) {
+                Ok(size) => size,
+                Err(e) => {
+                    eprint!("libalpaca: cannot sample html page size: {}\n", e);
+                    return document_to_c(&document, info);
+                }
+            }
+        } else {
+            // Target size for the html is a multiple of "obj_size".
+            get_multiple(info.obj_size, html_min_size)
+        };
 
     get_html_padding(&mut content, target_size); // Pad the html to the target size.
 
-    return content_to_c(content, html_size);
+    return content_to_c(content, info);
 }
 
 /// Returns the object's padding.
 #[no_mangle]
-pub extern "C" fn morph_object(
-    kind: *const c_char,
-    query: *const c_char,
-    size: &mut usize,
-) -> *const u8 {
+pub extern "C" fn morph_object(pinfo: *mut MorphInfo) -> u8 {
 
-    let cstr_kind = unsafe { CStr::from_ptr(kind) };
-    let kind = dom::parse_object_kind(cstr_kind.to_str().unwrap());
+    let info = unsafe { &mut *pinfo };
 
-    let cstr_query = unsafe { CStr::from_ptr(query) };
-    let query = cstr_query.to_str().unwrap();
+    let content_type = c_string_to_str(info.content_type).unwrap();
+    let query = c_string_to_str(info.query).unwrap();
+
+    let kind = dom::parse_object_kind(content_type);
 
     let target_size = dom::parse_target_size(query);
-    if (target_size == 0) || (target_size <= *size) {
+    if (target_size == 0) || (target_size <= info.size) {
         // Target size has to be greater than current size.
-        return content_to_c(Vec::new(), size);
+        return content_to_c(Vec::new(), info);
     }
 
-    let padding = get_object_padding(kind, *size, target_size); // Get the padding for the object.
+    let padding = get_object_padding(kind, info.size, target_size); // Get the padding for the object.
 
-    return content_to_c(padding, size);
+    return content_to_c(padding, info);
 }
 
 /// Frees memory allocated in rust.
 #[no_mangle]
 pub extern "C" fn free_memory(data: *mut u8, size: usize) {
+
     let s = unsafe { std::slice::from_raw_parts_mut(data, size) };
     let s = s.as_mut_ptr();
     unsafe {
@@ -352,16 +309,20 @@ fn add_padding_objects(document: &NodeRef, objects: &[Object]) {
 // Builds the returned html, stores its size in html_size and returns a
 // 'forgotten' unsafe pointer to the html, for returning to C
 //
-fn document_to_c(document: &NodeRef, html_size: &mut usize) -> *const u8 {
+fn document_to_c(document: &NodeRef, info: &mut MorphInfo) -> u8 {
     let content = dom::serialize_html(document);
-    return content_to_c(content, html_size);
+    return content_to_c(content, info);
 }
 
-fn content_to_c(content: Vec<u8>, size: &mut usize) -> *const u8 {
-    *size = content.len();
+fn content_to_c(content: Vec<u8>, info: &mut MorphInfo) -> u8 {
+    info.size = content.len();
 
     let mut buf = content.into_boxed_slice();
-    let data = buf.as_mut_ptr();
+    info.content = buf.as_mut_ptr();
     std::mem::forget(buf);
-    data
+    1
+}
+
+fn c_string_to_str<'a>(s: *const u8) -> Result<&'a str, String> {
+    return stringify_error(unsafe { CStr::from_ptr(s as *const i8) }.to_str());
 }
