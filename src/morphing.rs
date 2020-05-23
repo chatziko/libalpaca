@@ -63,42 +63,20 @@ pub extern "C" fn morph_html(pinfo: *mut MorphInfo) -> u8 {
     let mut objects = dom::parse_objects(&document, full_root.as_str(), uri, info.alias); // Vector of objects found in the html.
     let orig_n = objects.len(); // Number of original objects.
 
-    let mut dists: Option<Distributions> = None;
-
-    if info.probabilistic != 0 {
-        // Probabilistic alpaca
-        // Construct a Distributions object containing the given distributions.
-        let dist_html_size = c_string_to_str(info.dist_html_size).unwrap();
-        let dist_obj_number = c_string_to_str(info.dist_obj_number).unwrap();
-        let dist_obj_size = c_string_to_str(info.dist_obj_size).unwrap();
-
-        dists = match Distributions::from(dist_html_size, dist_obj_number, dist_obj_size) {
-            Ok(result) => Some(result),
-            Err(e) => {
-                eprint!("libalpace: cannot load distributions: {}\n", e);
-                return document_to_c(&document, info);
-            }
-        };
-
-        match morph_from_distribution(&mut objects, dists.as_ref().unwrap()) {
-            Ok(_) => {},
-            Err(e) => {
-                eprint!("libalpaca: morph_from_distribution failed: {}\n", e);
-                return document_to_c(&document, info);
-            }
+    let target_size = match
+        if info.probabilistic != 0 {
+            morph_probabilistic(&document, &mut objects, &info)
+        } else {
+            morph_deterministic(&document, &mut objects, &info)
+        } {
+        Ok(s) => s,
+        Err(e) => {
+            eprint!("libalpaca: cannot morph: {}\n", e);
+            return document_to_c(&document, info);
         }
+    };
 
-    } else {
-        // Deterministic alpaca
-        match morph_deterministic(&mut objects, info.obj_num, info.obj_size, info.max_obj_size) {
-            Ok(_) => {},
-            Err(e) => {
-                eprint!("libalpaca: cannot morph_deterministic: {}\n", e);
-                return document_to_c(&document, info);
-            },
-        }
-    }
-
+    // insert refs and add padding
     match insert_objects_refs(&document, &objects, orig_n) {
         Ok(_) => {},
         Err(e) => {
@@ -108,23 +86,6 @@ pub extern "C" fn morph_html(pinfo: *mut MorphInfo) -> u8 {
     }
 
     let mut content = dom::serialize_html(&document);
-
-    // find target size
-    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
-    let target_size =
-        if info.probabilistic != 0 {
-            match sample_ge(&(dists.unwrap().html), html_min_size) {
-                Ok(size) => size,
-                Err(e) => {
-                    eprint!("libalpaca: cannot sample html page size: {}\n", e);
-                    return document_to_c(&document, info);
-                }
-            }
-        } else {
-            // Target size for the html is a multiple of "obj_size".
-            get_multiple(info.obj_size, html_min_size)
-        };
-
     get_html_padding(&mut content, target_size); // Pad the html to the target size.
 
     return content_to_c(content, info);
@@ -163,10 +124,18 @@ pub extern "C" fn free_memory(data: *mut u8, size: usize) {
     }
 }
 
-fn morph_from_distribution(
+fn morph_probabilistic (
+    document: &NodeRef,
     objects: &mut Vec<Object>,
-    dists: &Distributions,
-) -> Result<(), String> {
+    info: &MorphInfo,
+) -> Result<usize, String> {
+
+    let dist_html_size = c_string_to_str(info.dist_html_size).unwrap();
+    let dist_obj_number = c_string_to_str(info.dist_obj_number).unwrap();
+    let dist_obj_size = c_string_to_str(info.dist_obj_size).unwrap();
+
+    let dists = Distributions::from(dist_html_size, dist_obj_number, dist_obj_size)?;
+
     // we'll have at least as many objects as the original ones
     let initial_obj_no = objects.len();
 
@@ -208,15 +177,18 @@ fn morph_from_distribution(
         objects.push(Object::padding(target_sizes[i]));
     }
 
-    Ok(())
+    // find target size
+    let content = dom::serialize_html(&document);
+    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
+
+    sample_ge(&dists.html, html_min_size)
 }
 
 fn morph_deterministic(
+    document: &NodeRef,
     objects: &mut Vec<Object>,
-    obj_num: usize,
-    obj_size: usize,
-    max_obj_size: usize,
-) -> Result<(), String> {
+    info: &MorphInfo,
+) -> Result<usize, String> {
     // we'll have at least as many objects as the original ones
     let initial_obj_no = objects.len();
 
@@ -224,13 +196,13 @@ fn morph_deterministic(
     // objects. Count is a multiple of "obj_num" and bigger than "min_count".
     // Target size for each objects is a multiple of "obj_size" and bigger
     // than the object's  original size.
-    let target_count = get_multiple(obj_num, initial_obj_no);
+    let target_count = get_multiple(info.obj_num, initial_obj_no);
 
     for i in 0..objects.len() {
         let min_size = objects[i].content.len()
             + match objects[i].kind { ObjectKind::CSS | ObjectKind::JS => 4, _ => 0 };
 
-        let obj_target_size = get_multiple(obj_size, min_size);
+        let obj_target_size = get_multiple(info.obj_size, min_size);
         objects[i].target_size = Some(obj_target_size);
     }
 
@@ -238,14 +210,17 @@ fn morph_deterministic(
 
     // To get the target size of each fake object, sample uniformly a multiple
     // of "obj_size" which is smaller than "max_obj_size".
-    let fake_objects_sizes = get_multiples_in_range(obj_size, max_obj_size, fake_objects_count)?;
+    let fake_objects_sizes = get_multiples_in_range(info.obj_size, info.max_obj_size, fake_objects_count)?;
 
     // Add the fake objects to the vector.
     for i in 0..fake_objects_count {
         objects.push(Object::padding(fake_objects_sizes[i]));
     }
 
-    Ok(())
+    // find target size,a multiple of "obj_size".
+    let content = dom::serialize_html(&document);
+    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
+    Ok(get_multiple(info.obj_size, html_min_size))
 }
 
 /// Inserts the ALPaCA GET parameters to the html objects, and adds the fake objects to the html.
