@@ -14,7 +14,7 @@ const SAMPLE_LIMIT: usize = 30;
 pub struct Dist {
     pub name: String,
     pub params: Vec<f64>,           // For predefined distributions these are the params (eg mean, lambda, etc). For custom, these are the probabilities
-    pub values: Option<Vec<usize>>, // Only for custom, the values
+    pub values: Option<Vec<Vec<usize>>>, // Only for custom, the values
 }
 
 /// Parses a given distribution from the config file
@@ -31,7 +31,7 @@ impl Dist {
             let data = res?;
 
             // Construct the 2 vectors containing the values and probabilities
-            let mut values: Vec<usize> = Vec::new();
+            let mut values: Vec<Vec<usize>> = Vec::new();
             let mut probs: Vec<f64> = Vec::new();
             for line in data.lines() {
                 let l = String::from(line);
@@ -39,8 +39,8 @@ impl Dist {
                 if v.len() != 2 {
                     return Err(format!("invalid dist file {}, line {}", dist, line));
                 }
-                values.push(v[0].parse().unwrap());
-                probs.push(v[1].parse().unwrap());
+                probs.push(v[0].parse().unwrap());
+                values.push(v[1..].iter().map(|e| e.parse().unwrap()).collect());
             }
 
             return Ok(Dist {
@@ -101,9 +101,13 @@ pub fn sample_ge_many(dist:&Dist, lower_bound:usize, samples:usize) -> Result<Ve
 /// Samples a value greater or equal than the given one
 pub fn sample_ge(dist:&Dist, lower_bound:usize) -> Result<usize,String> {
     if dist.name == "custom" {
-        // sample from custom distribution in a single try, by considering only values >= lower_bound
         let values = dist.values.as_ref().unwrap();
-        let total_mass:f64 = (0..values.len()).filter(|i| values[*i] >= lower_bound).map(|i| dist.params[i]).sum();
+        if values[0].len() != 1 {
+            return Err(format!("alpaca: custom distribution contains {} values per row, expected 1", values[0].len()));
+        }
+
+        // sample from custom distribution in a single try, by considering only values >= lower_bound
+        let total_mass:f64 = (0..values.len()).filter(|i| values[*i][0] >= lower_bound).map(|i| dist.params[i]).sum();
         if total_mass < 1e-5 {
             return Err(format!("values >= {} have prob 0 in custom distribution", lower_bound));
         }
@@ -114,8 +118,8 @@ pub fn sample_ge(dist:&Dist, lower_bound:usize) -> Result<usize,String> {
 
         // Sample a value from the given distribution
         for i in 0..values.len() {
-            if values[i] >= lower_bound {
-                sampled_num = values[i];            // make sure we keep one
+            if values[i][0] >= lower_bound {
+                sampled_num = values[i][0];            // make sure we keep one
                 sum += dist.params[i] / total_mass;
                 if sum >= probability {
                     break;
