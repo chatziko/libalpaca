@@ -141,7 +141,7 @@ fn morph_probabilistic (
     let initial_obj_no = objects.len();
 
     // Sample target number of objects (count)
-    let target_obj_num = match sample_ge(&dist_obj_num, initial_obj_no) {
+    let target_obj_num = match sample_ge(&dist_obj_num, std::cmp::max(initial_obj_no, 1)) {
         Ok(c) => c,
         Err(e) => {
             eprint!("libalpaca: could not sample object number ({}), leaving unchanged ({})\n", e, initial_obj_no);
