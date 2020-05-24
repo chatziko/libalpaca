@@ -36,7 +36,7 @@ impl Dist {
             for line in data.lines() {
                 let l = String::from(line);
                 let v:Vec<&str> = l.split_whitespace().collect();
-                if v.len() != 2 {
+                if values.len() > 0 && v.len() != values[0].len()+1 {
                     return Err(format!("invalid dist file {}, line {}", dist, line));
                 }
                 probs.push(v[0].parse().unwrap());
@@ -49,9 +49,9 @@ impl Dist {
                 values: Some(values),
             });
 
-        } else if dist == "" {
+        } else if dist == "" || dist == "Joint" {
             return Ok( Dist {
-                name: String::from("None"),
+                name: String::from(dist),
                 params: Vec::new(),
                 values: None,
             });
@@ -128,7 +128,8 @@ pub fn sample_ge(dist:&Dist, lower_bound:usize) -> Result<usize,String> {
         }
         Ok(sampled_num)
 
-    } else if dist.name == "None" {
+    } else if dist.name == "" {
+        // empty dist means use the real value
         Ok(lower_bound)
 
     } else {
@@ -140,6 +141,46 @@ pub fn sample_ge(dist:&Dist, lower_bound:usize) -> Result<usize,String> {
         }
         Err(format!("SAMPLE_LIMIT={} reached for distribution {}", SAMPLE_LIMIT, dist.name))
     }
+}
+
+// returns a pair (a,b) from a joint distribution, satisfying
+//    a >= lb_a   and   b >= lb_b      where (a,b) = lower_bound
+//
+pub fn sample_pair_ge(dist:&Dist, lower_bound: (usize, usize)) -> Result<(usize,usize),String> {
+    if dist.name != "custom" {
+        return Err(format!("alpaca: joint distributions need to be given in a file (got: {})", dist.name));
+    }
+
+    let values = dist.values.as_ref().unwrap();
+    if values[0].len() != 2 {
+        return Err(format!("alpaca: custom distribution contains {} values per row, expected 2", values[0].len()));
+    }
+
+    // sample from custom distribution in a single try, by considering only values >= lower_bound
+    let (lb_a, lb_b) = lower_bound;
+
+    let total_mass:f64 = (0..values.len()).filter(|i| values[*i][0] >= lb_a && values[*i][1] >= lb_b).map(|i| dist.params[i]).sum();
+    if total_mass < 1e-5 {
+        return Err(format!("values >= ({},{}) have prob 0 in custom distribution", lb_a, lb_b));
+    }
+
+    let probability: f64 = rand::thread_rng().sample(rand_distr::OpenClosed01);
+    let mut sum = 0.0;
+    let mut sampled_a = 0;
+    let mut sampled_b = 0;
+
+    // Sample a value from the given distribution
+    for i in 0..values.len() {
+        if values[i][0] >= lb_a && values[i][1] >= lb_b {
+            sampled_a = values[i][0];            // make sure
+            sampled_b = values[i][1];            // we keep one
+            sum += dist.params[i] / total_mass;
+            if sum >= probability {
+                break;
+            }
+        }
+    }
+    Ok((sampled_a, sampled_b))
 }
 
 fn sample_predefined(dist:&Dist) -> usize {

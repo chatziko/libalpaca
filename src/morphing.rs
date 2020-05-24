@@ -4,7 +4,7 @@ use pad::{get_html_padding, get_object_padding};
 use dom;
 use pad;
 use dom::{Object,ObjectKind};
-use distribution::{Dist, sample_ge, sample_ge_many};
+use distribution::{Dist, sample_ge, sample_pair_ge, sample_ge_many};
 use deterministic::*;
 use aux::stringify_error;
 
@@ -28,7 +28,7 @@ pub struct MorphInfo {
     dist_html_size: *const u8,
     dist_obj_num: *const u8,
     dist_obj_size: *const u8,
-    dist_total_size: *const u8,
+    use_total_obj_size: usize,
 
     // for deterministic
     obj_num: usize,
@@ -136,7 +136,6 @@ fn morph_probabilistic (
     let dist_html_size = Dist::from(c_string_to_str(info.dist_html_size)?)?;
     let dist_obj_num = Dist::from(c_string_to_str(info.dist_obj_num)?)?;
     let dist_obj_size = Dist::from(c_string_to_str(info.dist_obj_size)?)?;
-    let dist_total_size = Dist::from(c_string_to_str(info.dist_total_size)?)?;
 
     // we'll have at least as many objects as the original ones
     let initial_obj_no = objects.len();
@@ -152,17 +151,18 @@ fn morph_probabilistic (
 
     // sample target html size
     let content = dom::serialize_html(&document);
-    let html_min_size = content.len()
+    let min_html_size = content.len()
         + 7                                         // for the comment characters
         + 23 * initial_obj_no                       // for ?alpaca-padding=...
         + 94 * (target_obj_num - initial_obj_no);   // for the fake images
-
-    let target_html_size = sample_ge(&dist_html_size, html_min_size)?;
+    let target_html_size;
 
     // find object sizes
-    if dist_obj_size.name != "None" {
+    if info.use_total_obj_size == 0 {
         // Sample each object size from dist_obj_size.
         //
+        target_html_size = sample_ge(&dist_html_size, min_html_size)?;
+
         // To more closely match the actual obj_size distribution, we'll sample values for all objects,
         // And then we'll use the largest to pad existing objects and the smallest for padding objects.
         let mut target_obj_sizes: Vec<usize> = sample_ge_many(&dist_obj_size, 1, target_obj_num)?;
@@ -192,20 +192,34 @@ fn morph_probabilistic (
         }
 
     } else {
-        // Sample the total page size from dist_total_size.
-        //
+        // Sample the __total__ object size from dist_obj_size.
+
         // create empty fake images
         for _ in 0..target_obj_num - initial_obj_no {
             objects.push(Object::fake_image(0));
         }
 
-        let min_total_size =
-            target_html_size +
-            objects.into_iter().map(|obj| obj.content.len() + pad::min_obj_padding(obj)).sum::<usize>();    // min size for each object
-        let total_size = sample_ge(&dist_total_size, min_total_size)?;
+        // min size of all objects
+        let min_obj_size = objects.into_iter().map(
+            |obj| obj.content.len() + pad::min_obj_padding(obj)
+        ).sum();
+        let target_obj_size;
+
+        // sample html/obj sizes, either together or separately
+        if dist_obj_size.name == "Joint" {
+            match sample_pair_ge(&dist_html_size, (min_html_size, min_obj_size))? {
+                (a, b) => {
+                    target_html_size = a;
+                    target_obj_size = b;
+                }
+            }
+        } else {
+            target_html_size = sample_ge(&dist_html_size, min_html_size)?;
+            target_obj_size  = sample_ge(&dist_obj_size,  min_obj_size )?;
+        }
 
         // split all extra size equally among all objects
-        let mut to_split  = total_size - min_total_size;
+        let mut to_split  = target_obj_size - min_obj_size;
         for (pos, obj) in objects.iter_mut().enumerate() {
             let pad = to_split / (target_obj_num - pos);
             obj.target_size = Some(obj.content.len() + pad::min_obj_padding(obj) + pad);
