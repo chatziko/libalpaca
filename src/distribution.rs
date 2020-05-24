@@ -17,91 +17,76 @@ pub struct Dist {
     pub values: Option<Vec<usize>>, // Only for custom, the values
 }
 
-/// A struct containing the 3 distributions needed for the probabilistic version.
-pub struct Distributions {
-    pub html: Dist,         // html dist
-    pub obj_num: Dist,      // number of objects
-    pub obj_size: Dist,     // size of object
-}
-
-impl Distributions {
+/// Parses a given distribution from the config file
+impl Dist {
     /// Construct a Distributions object.
-    pub fn from(
-        dist_html: &str,
-        dist_obj_num: &str,
-        dist_obj_size: &str,
-    ) -> Result<Distributions, String> {
-        // Parse html size distribution.
-        return Ok(Distributions {
-            html: parse_given_dist(dist_html)?,
-            obj_num: parse_given_dist(dist_obj_num)?,
-            obj_size: parse_given_dist(dist_obj_size)?,
-        })
-    }
-}
+    pub fn from(dist: &str) -> Result<Dist,String> {
+        if dist.ends_with(".dist") {
+            // A distribution file has been given
 
-/// Parses a given distribution and decides if its a predefined one or a file. Updates
-/// the Distribtuions object accordingly.
-fn parse_given_dist(dist: &str) -> Result<Dist,String> {
-
-    if dist.ends_with(".dist") {
-        // A distribution file has been given
-
-        let res = stringify_error(fs::read_to_string(dist.clone()));
-        if res.is_err() {
-            eprint!("libalpaca: cannot open {}: \n", dist);
-        }
-        let data = res?;
-
-        // Construct the 2 vectors containing the values and probabilities
-        let mut values: Vec<usize> = Vec::new();
-        let mut probs: Vec<f64> = Vec::new();
-        for line in data.lines() {
-            let l = String::from(line);
-            let v:Vec<&str> = l.split_whitespace().collect();
-            if v.len() != 2 {
-                return Err(format!("invalid dist file {}, line {}", dist, line));
+            let res = stringify_error(fs::read_to_string(dist.clone()));
+            if res.is_err() {
+                eprint!("libalpaca: cannot open {}: \n", dist);
             }
-            values.push(v[0].parse().unwrap());
-            probs.push(v[1].parse().unwrap());
+            let data = res?;
+
+            // Construct the 2 vectors containing the values and probabilities
+            let mut values: Vec<usize> = Vec::new();
+            let mut probs: Vec<f64> = Vec::new();
+            for line in data.lines() {
+                let l = String::from(line);
+                let v:Vec<&str> = l.split_whitespace().collect();
+                if v.len() != 2 {
+                    return Err(format!("invalid dist file {}, line {}", dist, line));
+                }
+                values.push(v[0].parse().unwrap());
+                probs.push(v[1].parse().unwrap());
+            }
+
+            return Ok(Dist {
+                name: String::from("custom"),
+                params: probs,
+                values: Some(values),
+            });
+
+        } else if dist == "" {
+            return Ok( Dist {
+                name: String::from("None"),
+                params: Vec::new(),
+                values: None,
+            });
+
+        } else {
+
+            let tokens: Vec<&str> = dist.split("/").collect();
+            if tokens.len() != 2 {
+                return Err(format!("invalid distribution {}", dist));
+            }
+
+            let name = tokens[0];
+            let params: Vec<f64> = tokens[1].split(",").map(|s| s.parse().unwrap()).collect(); // Distributions parameters
+
+            let params_needed = match name {
+                "Normal" => 2,
+                "LogNormal" => 2,
+                "Exp" => 1,
+                "Poisson" => 1,
+                "Binomial" => 2,
+                "Gamma" => 2,
+                _ => return Err(format!("invalid distribution {}", dist)),
+            };
+
+            // A predefined distribution and its parameters have been given.
+            if params.len() != params_needed {
+                return Err(format!("{} distribution requires {} params, {} given", name, params_needed, params.len()));
+            }
+
+            return Ok(Dist {
+                name: String::from(name),
+                params: params,
+                values: None,
+            });
         }
-
-        return Ok(Dist {
-            name: String::from("custom"),
-            params: probs,
-            values: Some(values),
-        });
-
-    } else {
-
-        let tokens: Vec<&str> = dist.split("/").collect();
-        if tokens.len() != 2 {
-            return Err(format!("invalid distribution {}", dist));
-        }
-
-        let name = tokens[0];
-        let params: Vec<f64> = tokens[1].split(",").map(|s| s.parse().unwrap()).collect(); // Distributions parameters
-
-        let params_needed = match name {
-            "Normal" => 2,
-            "LogNormal" => 2,
-            "Exp" => 1,
-            "Poisson" => 1,
-            "Binomial" => 2,
-            "Gamma" => 2,
-            _ => return Err(format!("invalid distribution {}", dist)),
-        };
-
-        // A predefined distribution and its parameters have been given.
-        if params.len() != params_needed {
-            return Err(format!("{} distribution requires {} params, {} given", name, params_needed, params.len()));
-        }
-
-        return Ok(Dist {
-            name: String::from(name),
-            params: params,
-            values: None,
-        });
     }
 }
 
@@ -138,6 +123,9 @@ pub fn sample_ge(dist:&Dist, lower_bound:usize) -> Result<usize,String> {
             }
         }
         Ok(sampled_num)
+
+    } else if dist.name == "None" {
+        Ok(lower_bound)
 
     } else {
         for _ in 0..SAMPLE_LIMIT {

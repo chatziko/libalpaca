@@ -9,7 +9,7 @@ use aux;
 /// unique (distribution, padding type) tuple.
 #[derive(PartialEq)]
 pub enum ObjectKind {
-    Alpaca,		/// Fake "padding" object
+    FakeIMG,	/// Fake alpaca image
     HTML,
     CSS,
     IMG,		/// IMG: PNG, JPEG, etc.
@@ -33,7 +33,7 @@ pub struct Object {
 
 impl Object {
     /// Construct a real object from the html page
-    pub fn real(content: &[u8], kind: ObjectKind, uri: String, node: &NodeRef) -> Object {
+    pub fn existing(content: &[u8], kind: ObjectKind, uri: String, node: &NodeRef) -> Object {
         Object {
             kind: kind,
             content: content.to_vec(),
@@ -44,9 +44,9 @@ impl Object {
     }
 
     /// Create padding object
-    pub fn padding(target_size: usize) -> Object {
+    pub fn fake_image(target_size: usize) -> Object {
         Object {
-            kind: ObjectKind::Alpaca,
+            kind: ObjectKind::FakeIMG,
             content: Vec::new(),
             node: None,
             target_size: Some(target_size),
@@ -123,7 +123,7 @@ pub fn parse_objects(document: &NodeRef, root: &str, uri: &str, alias: usize) ->
 		}
 
 		match aux::stringify_error(fs::read(&fullpath)) {
-			Ok(data) => objects.push(Object::real(&data, kind, path, node)),
+			Ok(data) => objects.push(Object::existing(&data, kind, path, node)),
 			Err(e) => { eprint!("libalpaca: cannot read {} ({})\n", fullpath, e); continue },
 		}
     }

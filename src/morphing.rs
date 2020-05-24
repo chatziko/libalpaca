@@ -2,8 +2,9 @@
 use std::ffi::CStr;
 use pad::{get_html_padding, get_object_padding};
 use dom;
+use pad;
 use dom::{Object,ObjectKind};
-use distribution::{Distributions, sample_ge, sample_ge_many};
+use distribution::{Dist, sample_ge, sample_ge_many};
 use deterministic::*;
 use aux::stringify_error;
 
@@ -25,8 +26,9 @@ pub struct MorphInfo {
 
     // for probabilistic
     dist_html_size: *const u8,
-    dist_obj_number: *const u8,
+    dist_obj_num: *const u8,
     dist_obj_size: *const u8,
+    dist_total_size: *const u8,
 
     // for deterministic
     obj_num: usize,
@@ -105,6 +107,7 @@ pub extern "C" fn morph_object(pinfo: *mut MorphInfo) -> u8 {
     let target_size = dom::parse_target_size(query);
     if (target_size == 0) || (target_size <= info.size) {
         // Target size has to be greater than current size.
+        eprint!("alpaca: morph_object: target_size ({}) cannot match current size ({})\n", target_size, info.size);
         return content_to_c(Vec::new(), info);
     }
 
@@ -130,17 +133,16 @@ fn morph_probabilistic (
     info: &MorphInfo,
 ) -> Result<usize, String> {
 
-    let dist_html_size = c_string_to_str(info.dist_html_size).unwrap();
-    let dist_obj_number = c_string_to_str(info.dist_obj_number).unwrap();
-    let dist_obj_size = c_string_to_str(info.dist_obj_size).unwrap();
-
-    let dists = Distributions::from(dist_html_size, dist_obj_number, dist_obj_size)?;
+    let dist_html_size = Dist::from(c_string_to_str(info.dist_html_size)?)?;
+    let dist_obj_num = Dist::from(c_string_to_str(info.dist_obj_num)?)?;
+    let dist_obj_size = Dist::from(c_string_to_str(info.dist_obj_size)?)?;
+    let dist_total_size = Dist::from(c_string_to_str(info.dist_total_size)?)?;
 
     // we'll have at least as many objects as the original ones
     let initial_obj_no = objects.len();
 
     // Sample target number of objects (count)
-    let target_count = match sample_ge(&dists.obj_num, initial_obj_no) {
+    let target_obj_num = match sample_ge(&dist_obj_num, initial_obj_no) {
         Ok(c) => c,
         Err(e) => {
             eprint!("libalpaca: could not sample object number ({}), leaving unchanged ({})\n", e, initial_obj_no);
@@ -148,40 +150,70 @@ fn morph_probabilistic (
         }
     };
 
-    // To more closely match the actual obj_size distribution, we'll sample values for all objects,
-    // And then we'll use the largest to pad existing objects and the smallest for padding objects.
-    let mut target_sizes: Vec<usize> = sample_ge_many(&dists.obj_size, 1, target_count)?;
-    target_sizes.sort_unstable();       // ascending
-
-    // Pad existing objects
-    for obj in &mut *objects {
-        let needed_size = obj.content.len() +
-            match obj.kind { ObjectKind::CSS | ObjectKind::JS => 4, _ => 0 };   // CSS/JS padding needs to be at least 4.
-
-        // Take the largest size, if not enough draw a new one with this specific needed_size
-        obj.target_size = if target_sizes[target_sizes.len()-1] >= needed_size {
-            Some(target_sizes.pop().unwrap())
-        } else {
-            match sample_ge(&dists.obj_size, needed_size) {
-                Ok(size) => Some(size),
-                Err(e) => {
-                    eprint!("libalpaca: warning: no padding was found for {} ({})\n", obj.uri, e);
-                    None
-                },
-            }
-        };
-    }
-
-    // create padding objects, using the smallest of the sizes
-    for i in 0..target_count - initial_obj_no {
-        objects.push(Object::padding(target_sizes[i]));
-    }
-
-    // find target size
+    // sample target html size
     let content = dom::serialize_html(&document);
-    let html_min_size = content.len() + 7; // Plus 7 because of the comment characters.
+    let html_min_size = content.len()
+        + 7                                         // for the comment characters
+        + 23 * initial_obj_no                       // for ?alpaca-padding=...
+        + 94 * (target_obj_num - initial_obj_no);   // for the fake images
 
-    sample_ge(&dists.html, html_min_size)
+    let target_html_size = sample_ge(&dist_html_size, html_min_size)?;
+
+    // find object sizes
+    if dist_obj_size.name != "None" {
+        // Sample each object size from dist_obj_size.
+        //
+        // To more closely match the actual obj_size distribution, we'll sample values for all objects,
+        // And then we'll use the largest to pad existing objects and the smallest for padding objects.
+        let mut target_obj_sizes: Vec<usize> = sample_ge_many(&dist_obj_size, 1, target_obj_num)?;
+        target_obj_sizes.sort_unstable();       // ascending
+
+        // Pad existing objects
+        for obj in &mut *objects {
+            let needed_size = obj.content.len() + pad::min_obj_padding(&obj);
+
+            // Take the largest size, if not enough draw a new one with this specific needed_size
+            obj.target_size = if target_obj_sizes[target_obj_sizes.len()-1] >= needed_size {
+                Some(target_obj_sizes.pop().unwrap())
+            } else {
+                match sample_ge(&dist_obj_size, needed_size) {
+                    Ok(size) => Some(size),
+                    Err(e) => {
+                        eprint!("libalpaca: warning: no padding was found for {} ({})\n", obj.uri, e);
+                        None
+                    },
+                }
+            };
+        }
+
+        // create padding objects, using the smallest of the sizes
+        for i in 0..target_obj_num - initial_obj_no {
+            objects.push(Object::fake_image(target_obj_sizes[i]));
+        }
+
+    } else {
+        // Sample the total page size from dist_total_size.
+        //
+        // create empty fake images
+        for _ in 0..target_obj_num - initial_obj_no {
+            objects.push(Object::fake_image(0));
+        }
+
+        let min_total_size =
+            target_html_size +
+            objects.into_iter().map(|obj| obj.content.len() + pad::min_obj_padding(obj)).sum::<usize>();    // min size for each object
+        let total_size = sample_ge(&dist_total_size, min_total_size)?;
+
+        // split all extra size equally among all objects
+        let mut to_split  = total_size - min_total_size;
+        for (pos, obj) in objects.iter_mut().enumerate() {
+            let pad = to_split / (target_obj_num - pos);
+            obj.target_size = Some(obj.content.len() + pad::min_obj_padding(obj) + pad);
+            to_split -= pad;
+        }
+    }
+
+    Ok(target_html_size)
 }
 
 fn morph_deterministic(
@@ -214,7 +246,7 @@ fn morph_deterministic(
 
     // Add the fake objects to the vector.
     for i in 0..fake_objects_count {
-        objects.push(Object::padding(fake_objects_sizes[i]));
+        objects.push(Object::fake_image(fake_objects_sizes[i]));
     }
 
     // find target size,a multiple of "obj_size".
@@ -273,11 +305,13 @@ fn add_padding_objects(document: &NodeRef, objects: &[Object]) {
         None => document,
     };
 
+    let mut i = 1;
     for object in objects {
         let elem = dom::create_element("img");
-        dom::node_set_attribute(&elem, "src", format!("/__alpaca_fake_image.png?alpaca-padding={}", object.target_size.unwrap()));
+        dom::node_set_attribute(&elem, "src", format!("/__alpaca_fake_image.png?alpaca-padding={}&i={}", object.target_size.unwrap(), i));
         dom::node_set_attribute(&elem, "style", String::from("visibility:hidden"));
         node.append(elem);
+        i += 1;
     }
 }
 
