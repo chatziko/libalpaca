@@ -138,14 +138,14 @@ fn morph_probabilistic (
     let dist_obj_size = Dist::from(c_string_to_str(info.dist_obj_size)?)?;
 
     // we'll have at least as many objects as the original ones
-    let initial_obj_no = objects.len();
+    let initial_obj_num = objects.len();
 
     // Sample target number of objects (count)
-    let target_obj_num = match sample_ge(&dist_obj_num, std::cmp::max(initial_obj_no, 1)) {
+    let mut target_obj_num = match sample_ge(&dist_obj_num, initial_obj_num) {
         Ok(c) => c,
         Err(e) => {
-            eprint!("libalpaca: could not sample object number ({}), leaving unchanged ({})\n", e, initial_obj_no);
-            initial_obj_no
+            eprint!("libalpaca: could not sample object number ({}), leaving unchanged ({})\n", e, initial_obj_num);
+            initial_obj_num
         }
     };
 
@@ -153,8 +153,8 @@ fn morph_probabilistic (
     let content = dom::serialize_html(&document);
     let min_html_size = content.len()
         + 7                                         // for the comment characters
-        + 23 * initial_obj_no                       // for ?alpaca-padding=...
-        + 94 * (target_obj_num - initial_obj_no);   // for the fake images
+        + 23 * initial_obj_num                       // for ?alpaca-padding=...
+        + 94 * (target_obj_num - initial_obj_num);   // for the fake images
     let target_html_size;
 
     // find object sizes
@@ -187,17 +187,12 @@ fn morph_probabilistic (
         }
 
         // create padding objects, using the smallest of the sizes
-        for i in 0..target_obj_num - initial_obj_no {
+        for i in 0..target_obj_num - initial_obj_num {
             objects.push(Object::fake_image(target_obj_sizes[i]));
         }
 
     } else {
         // Sample the __total__ object size from dist_obj_size.
-
-        // create empty fake images
-        for _ in 0..target_obj_num - initial_obj_no {
-            objects.push(Object::fake_image(0));
-        }
 
         // min size of all objects
         let min_obj_size = objects.into_iter().map(
@@ -216,6 +211,15 @@ fn morph_probabilistic (
         } else {
             target_html_size = sample_ge(&dist_html_size, min_html_size)?;
             target_obj_size  = sample_ge(&dist_obj_size,  min_obj_size )?;
+        }
+
+        // create empty fake images
+        if target_obj_size > 0 && target_obj_num == 0 {
+            // we chose a non-zero target_obj_size but have no objects to pad, create a fake one
+            target_obj_num = 1;
+        }
+        for _ in 0..target_obj_num - initial_obj_num {
+            objects.push(Object::fake_image(0));
         }
 
         // split all extra size equally among all objects
