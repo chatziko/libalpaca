@@ -110,6 +110,11 @@ pub extern "C" fn morph_object(pinfo: *mut MorphInfo) -> u8 {
         eprint!("alpaca: morph_object: target_size ({}) cannot match current size ({})\n", target_size, info.size);
         return content_to_c(Vec::new(), info);
     }
+    if target_size > 1000000000 {
+        // Target size too big
+        eprint!("alpaca: morph_object: target_size ({}) more than 1GB, probably wrong configuration or an alpaca bug\n", target_size);
+        return content_to_c(Vec::new(), info);
+    }
 
     let padding = get_object_padding(kind, info.size, target_size); // Get the padding for the object.
 

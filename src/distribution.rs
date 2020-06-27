@@ -183,19 +183,23 @@ pub fn sample_pair_ge(dist:&Dist, lower_bound: (usize, usize)) -> Result<(usize,
     Ok((sampled_a, sampled_b))
 }
 
+fn f64_to_usize(f:f64) -> usize {
+    return if f < 0.0 { 0 } else { f as usize };
+}
+
 fn sample_predefined(dist:&Dist) -> usize {
    match dist.name.as_str() {
         "Normal" => {
             let d = rand_distr::Normal::new(dist.params[0], dist.params[1]).unwrap();
-            d.sample(&mut rand::thread_rng()) as usize
+            f64_to_usize(d.sample(&mut rand::thread_rng()))
         },
         "LogNormal" => {
             let d = rand_distr::LogNormal::new(dist.params[0], dist.params[1]).unwrap();
-            d.sample(&mut rand::thread_rng()) as usize
+            f64_to_usize(d.sample(&mut rand::thread_rng()))
         },
         "Exp" => {
             let d = rand_distr::Exp::new(dist.params[0]).unwrap();
-            d.sample(&mut rand::thread_rng()) as usize
+            f64_to_usize(d.sample(&mut rand::thread_rng()))
         },
         // "Poisson" => {
         //     let d = Poisson::new(dist.params[0]).unwrap();
@@ -203,11 +207,11 @@ fn sample_predefined(dist:&Dist) -> usize {
         // },
         "Binomial" => {
             let d = rand_distr::Binomial::new(dist.params[0] as u64, dist.params[1]).unwrap();
-            d.sample(&mut rand::thread_rng()) as usize
+            d.sample(&mut rand::thread_rng()) as usize      // sample is u64
         },
         "Gamma" => {
             let d = rand_distr::Gamma::new(dist.params[0], dist.params[1]).unwrap();
-            d.sample(&mut rand::thread_rng()) as usize
+            f64_to_usize(d.sample(&mut rand::thread_rng()) )
         },
         _ => panic!("not possible"),
     }
